@@ -7,7 +7,8 @@ import { Button } from '../components/ui/Button';
 import { Textarea } from '../components/ui/Input';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
 import { useAuth } from '../contexts/AuthContext';
-import type { ChatMessage } from '../types';
+import { supabaseUrl, supabaseAnonKey } from '../lib/supabase';
+import type { ChatMessage, AIResponse } from '../types';
 
 const exampleQuestions = [
   'What is our current cash position and 30-day projection?',
@@ -21,6 +22,8 @@ export function Chat() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [currentThreadId, setCurrentThreadId] = useState<string | undefined>();
+  const [currentConversationId, setCurrentConversationId] = useState<string | undefined>();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { user } = useAuth();
 
@@ -50,38 +53,54 @@ export function Chat() {
     setError('');
 
     try {
+      const response = await fetch(`${supabaseUrl}/functions/v1/ai-chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${supabaseAnonKey}`,
+        },
+        body: JSON.stringify({
+          message: input.trim(),
+          threadId: currentThreadId,
+          conversationId: currentConversationId,
+          userId: user?.id || 'anonymous',
+          companyBuId: user?.company_bu_id || 'default',
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Error ${response.status}`);
+      }
+
+      const data: AIResponse & { threadId?: string } = await response.json();
+
+      // Save thread ID for conversation continuity
+      if (data.threadId) {
+        setCurrentThreadId(data.threadId);
+      }
+      if (data.conversationId) {
+        setCurrentConversationId(data.conversationId);
+      }
+
       const assistantMessage: ChatMessage = {
         id: crypto.randomUUID(),
-        conversation_id: 'demo',
+        conversation_id: data.conversationId || 'live',
         role: 'assistant',
-        content: `Based on your question about "${input.trim()}", here's my analysis:\n\nThis is a demo response. Once the Edge Functions are deployed with Microsoft Foundry Agent and Google Gemini integrations, this will provide real AI-powered insights with generated visualizations.\n\nThe system will:\n• Analyze your cashflow data using Microsoft Foundry Agent\n• Generate consulting-style visualizations with Google Gemini\n• Display KPIs, tables, and actionable insights`,
-        extracted_tables: [
-          {
-            title: 'Sample Data Analysis',
-            columns: ['Metric', 'Current', 'Previous', 'Change'],
-            rows: [
-              ['Cash Position', '$3.5M', '$3.2M', '+9.4%'],
-              ['Payables', '$400K', '$385K', '+3.9%'],
-              ['Receivables', '$470K', '$450K', '+4.4%'],
-            ],
-          },
-        ],
-        kpis: {
-          roi_usd: 125000,
-          opex_avoided_usd: 85000,
-          revenue_impact_usd: 200000,
-          time_to_value_days: 45,
-          confidence_0_1: 0.87,
-        },
+        content: data.answerMarkdown,
+        extracted_tables: data.extractedTables,
+        kpis: data.kpis,
+        image_url: data.image?.imageUrl,
+        image_prompt: data.image?.promptUsed,
+        image_alt_text: data.image?.altText,
         created_at: new Date().toISOString(),
       };
 
-      setTimeout(() => {
-        setMessages((prev) => [...prev, assistantMessage]);
-        setLoading(false);
-      }, 1500);
+      setMessages((prev) => [...prev, assistantMessage]);
+      setLoading(false);
     } catch (err) {
-      setError('Failed to get AI response. Please try again.');
+      const errorMessage = err instanceof Error ? err.message : 'Failed to get AI response';
+      setError(`Error: ${errorMessage}. Please try again.`);
       setLoading(false);
       console.error('Chat error:', err);
     }
