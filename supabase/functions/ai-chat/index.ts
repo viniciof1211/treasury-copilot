@@ -9,6 +9,7 @@ const corsHeaders = {
 interface ChatRequest {
   message: string;
   conversationId?: string;
+  threadId?: string;  // Azure AI Foundry thread ID for conversation continuity
   userId: string;
   companyBuId: string;
 }
@@ -33,29 +34,204 @@ interface GeminiImageResponse {
   imageUrl: string;
 }
 
-async function callFoundryAgent(message: string): Promise<FoundryResponse> {
-  const foundryBaseUrl = Deno.env.get("FOUNDARY_AGENT_BASE_URL");
-  const foundryApiKey = Deno.env.get("FOUNDARY_AGENT_API_KEY");
-  const foundryAgentId = Deno.env.get("FOUNDARY_AGENT_ID");
+// Cache the resolved agent ID at module level
+let cachedAgentId: string | null = null;
 
-  if (!foundryBaseUrl || !foundryApiKey || !foundryAgentId) {
-    throw new Error("Missing Foundry Agent configuration");
+async function resolveAgentId(baseUrl: string, apiKey: string, agentName: string): Promise<string> {
+  if (cachedAgentId) {
+    console.log("Using cached agent ID:", cachedAgentId);
+    return cachedAgentId;
   }
 
-  const response = await fetch(`${foundryBaseUrl}/agents/${foundryAgentId}/chat`, {
-    method: "POST",
+  console.log("Resolving agent ID for name:", agentName);
+  const response = await fetch(`${baseUrl}/assistants?api-version=v1`, {
+    method: "GET",
     headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${foundryApiKey}`,
+      "api-key": apiKey,
     },
-    body: JSON.stringify({ message }),
   });
 
   if (!response.ok) {
-    throw new Error(`Foundry Agent API error: ${response.statusText}`);
+    const errorText = await response.text();
+    throw new Error(`Failed to fetch agents: ${response.status} ${errorText}`);
   }
 
-  return await response.json();
+  const data = await response.json();
+  const agents = data.data || [];
+  
+  const matchingAgent = agents.find((agent: { name: string }) => agent.name === agentName);
+  
+  if (!matchingAgent) {
+    const availableNames = agents.map((agent: { name: string }) => agent.name).join(", ");
+    throw new Error(`Agent '${agentName}' not found. Available agents: ${availableNames || "none"}`);
+  }
+
+  cachedAgentId = matchingAgent.id;
+  console.log("Resolved agent ID:", cachedAgentId);
+  return cachedAgentId;
+}
+
+async function callFoundryAgent(message: string, existingThreadId?: string): Promise<FoundryResponse & { threadId: string }> {
+  const foundryBaseUrl = Deno.env.get("FOUNDARY_AGENT_BASE_URL");
+  const foundryApiKey = Deno.env.get("FOUNDARY_AGENT_API_KEY");
+  const foundryAgentId = Deno.env.get("FOUNDARY_AGENT_ID");
+  const foundryAgentName = Deno.env.get("FOUNDARY_AGENT_NAME");
+
+  if (!foundryBaseUrl || !foundryApiKey) {
+    throw new Error("Missing Foundry Agent base URL or API key");
+  }
+
+  // Step 1: Resolve Agent ID (by name or use direct ID)
+  let agentId: string;
+  if (foundryAgentId) {
+    console.log("Using direct agent ID from env:", foundryAgentId);
+    agentId = foundryAgentId;
+  } else if (foundryAgentName) {
+    agentId = await resolveAgentId(foundryBaseUrl, foundryApiKey, foundryAgentName);
+  } else {
+    throw new Error("Either FOUNDARY_AGENT_ID or FOUNDARY_AGENT_NAME must be set");
+  }
+
+  // Step 2: Create or use existing Thread
+  let threadId: string;
+  if (existingThreadId) {
+    console.log("Using existing thread ID:", existingThreadId);
+    threadId = existingThreadId;
+  } else {
+    console.log("Creating new thread...");
+    const threadResponse = await fetch(`${foundryBaseUrl}/threads?api-version=v1`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "api-key": foundryApiKey,
+      },
+      body: JSON.stringify({}),
+    });
+
+    if (!threadResponse.ok) {
+      const errorText = await threadResponse.text();
+      throw new Error(`Failed to create thread: ${threadResponse.status} ${errorText}`);
+    }
+
+    const threadData = await threadResponse.json();
+    threadId = threadData.id;
+    console.log("Created thread ID:", threadId);
+  }
+
+  // Step 3: Add User Message
+  console.log("Adding user message to thread...");
+  const messageResponse = await fetch(`${foundryBaseUrl}/threads/${threadId}/messages?api-version=v1`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "api-key": foundryApiKey,
+    },
+    body: JSON.stringify({
+      role: "user",
+      content: message,
+    }),
+  });
+
+  if (!messageResponse.ok) {
+    const errorText = await messageResponse.text();
+    throw new Error(`Failed to add message: ${messageResponse.status} ${errorText}`);
+  }
+
+  console.log("User message added successfully");
+
+  // Step 4: Create a Run
+  console.log("Creating run with agent ID:", agentId);
+  const runResponse = await fetch(`${foundryBaseUrl}/threads/${threadId}/runs?api-version=v1`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "api-key": foundryApiKey,
+    },
+    body: JSON.stringify({
+      assistant_id: agentId,
+    }),
+  });
+
+  if (!runResponse.ok) {
+    const errorText = await runResponse.text();
+    throw new Error(`Failed to create run: ${runResponse.status} ${errorText}`);
+  }
+
+  const runData = await runResponse.json();
+  const runId = runData.id;
+  console.log("Created run ID:", runId, "Status:", runData.status);
+
+  // Step 5: Poll Run Status
+  console.log("Polling run status...");
+  const maxAttempts = 60; // 60 seconds timeout
+  let attempts = 0;
+  let runStatus = runData.status;
+
+  while (runStatus !== "completed" && attempts < maxAttempts) {
+    await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+    attempts++;
+
+    const statusResponse = await fetch(`${foundryBaseUrl}/threads/${threadId}/runs/${runId}?api-version=v1`, {
+      method: "GET",
+      headers: {
+        "api-key": foundryApiKey,
+      },
+    });
+
+    if (!statusResponse.ok) {
+      const errorText = await statusResponse.text();
+      throw new Error(`Failed to poll run status: ${statusResponse.status} ${errorText}`);
+    }
+
+    const statusData = await statusResponse.json();
+    runStatus = statusData.status;
+    console.log(`Poll attempt ${attempts}: Run status = ${runStatus}`);
+
+    if (runStatus === "failed" || runStatus === "cancelled" || runStatus === "expired") {
+      const errorMessage = statusData.last_error?.message || "Unknown error";
+      throw new Error(`Run ${runStatus}: ${errorMessage}`);
+    }
+  }
+
+  if (runStatus !== "completed") {
+    throw new Error(`Run timed out after ${maxAttempts} seconds`);
+  }
+
+  console.log("Run completed successfully");
+
+  // Step 6: Get Messages
+  console.log("Fetching messages...");
+  const messagesResponse = await fetch(`${foundryBaseUrl}/threads/${threadId}/messages?api-version=v1&order=desc&limit=10`, {
+    method: "GET",
+    headers: {
+      "api-key": foundryApiKey,
+    },
+  });
+
+  if (!messagesResponse.ok) {
+    const errorText = await messagesResponse.text();
+    throw new Error(`Failed to get messages: ${messagesResponse.status} ${errorText}`);
+  }
+
+  const messagesData = await messagesResponse.json();
+  const messages = messagesData.data || [];
+
+  // Find the latest assistant message
+  const assistantMessage = messages.find((msg: { role: string }) => msg.role === "assistant");
+
+  if (!assistantMessage || !assistantMessage.content || assistantMessage.content.length === 0) {
+    throw new Error("No assistant response found");
+  }
+
+  const answerText = assistantMessage.content[0]?.text?.value || "";
+  console.log("Retrieved assistant answer, length:", answerText.length);
+
+  // Return the response with threadId for continuity
+  return {
+    answer: answerText,
+    threadId: threadId,
+    // TODO: Parse tables and KPIs from the response if the agent provides structured data
+  };
 }
 
 async function generateImage(prompt: string): Promise<GeminiImageResponse> {
@@ -169,7 +345,7 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { message, conversationId, userId, companyBuId }: ChatRequest = await req.json();
+    const { message, conversationId, threadId, userId, companyBuId }: ChatRequest = await req.json();
 
     if (!message || !userId || !companyBuId) {
       return new Response(
@@ -181,7 +357,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const foundryResponse = await callFoundryAgent(message);
+    const foundryResponse = await callFoundryAgent(message, threadId);
 
     let imageData = null;
     if (shouldGenerateImage(foundryResponse.answer, foundryResponse.kpis)) {
@@ -200,6 +376,7 @@ Deno.serve(async (req: Request) => {
 
     const response = {
       conversationId: conversationId || crypto.randomUUID(),
+      threadId: foundryResponse.threadId,  // Return thread ID for continuity
       answerMarkdown: foundryResponse.answer,
       extractedTables: foundryResponse.tables || [],
       kpis: foundryResponse.kpis || {},

@@ -144,12 +144,14 @@ Set environment variables for Edge Functions in Supabase Dashboard:
 
 ```bash
 # In Supabase Dashboard > Edge Functions > Settings
-FOUNDARY_AGENT_BASE_URL=https://your-foundry-endpoint.com
-FOUNDARY_AGENT_API_KEY=your-foundry-api-key
-FOUNDARY_AGENT_ID=your-agent-id
+FOUNDARY_AGENT_BASE_URL=https://next-sdai-resource.services.ai.azure.com/api/projects/next-sdai
+FOUNDARY_AGENT_API_KEY=<your-project-api-key>
+FOUNDARY_AGENT_NAME=sdai-cashflows-cxc
 GEMINI_API_KEY=your-gemini-api-key
 GEMINI_IMAGE_MODEL=nano-banana-pro
 ```
+
+**Note:** You can optionally set `FOUNDARY_AGENT_ID` directly if you already know the agent ID, which will skip the agent resolution step.
 
 ## Verification
 
