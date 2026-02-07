@@ -203,5 +203,75 @@ export function CashflowAgentTools() {
     },
   });
 
+  // ─── Web Search (Tavily) ──────────────────────────────────────────────────
+  useCopilotAction({
+    name: 'web_search',
+    description:
+      'Search the web for real-time information: exchange rates (CRC/USD), tax rules (IVA, cargas sociales, DUA), bank interest rates (Davivienda, BCR, Nacional), Hacienda regulations, import/nationalization costs, CCSS rates, fiscal calendar, and any ambiguous or current-event data. Returns an AI-summarized answer plus source URLs.',
+    parameters: [
+      {
+        name: 'query',
+        type: 'string',
+        description: 'Search query in natural language, e.g. "tipo de cambio CRC USD hoy" or "cargas sociales patronales Costa Rica 2026"',
+        required: true,
+      },
+      {
+        name: 'search_depth',
+        type: 'string',
+        description: '"basic" (fast, default) or "advanced" (deeper, slower)',
+        required: false,
+      },
+      {
+        name: 'include_domains',
+        type: 'string',
+        description: 'Comma-separated domains to restrict search, e.g. "hacienda.go.cr,bccr.fi.cr,ccss.sa.cr"',
+        required: false,
+      },
+    ],
+    handler: async ({ query, search_depth, include_domains }) => {
+      const params: Record<string, unknown> = { query };
+      if (search_depth) params.search_depth = search_depth;
+      if (include_domains) {
+        params.include_domains = include_domains.split(',').map((d: string) => d.trim());
+      }
+      const result = await callTreasuryTool('web_search', params);
+      return JSON.stringify(result);
+    },
+  });
+
+  // ─── Costa Rica Economic Indicators (BCCR) ───────────────────────────────
+  useCopilotAction({
+    name: 'get_cr_indicators',
+    description:
+      'Get official Costa Rican economic indicators from BCCR (Banco Central). Use for: tipo de cambio compra/venta USD-CRC, tasa básica pasiva, IPC, tasa de política monetaria. ALWAYS prefer this over web_search for exchange rates — returns the official BCCR rate.',
+    parameters: [
+      {
+        name: 'indicator',
+        type: 'string',
+        description: '"tipo_cambio" (USD/CRC buy+sell), "tasa_basica", "ipc", "tpm", or a numeric BCCR indicator code',
+        required: true,
+      },
+      {
+        name: 'date_from',
+        type: 'string',
+        description: 'Start date DD/MM/YYYY (defaults to today)',
+        required: false,
+      },
+      {
+        name: 'date_to',
+        type: 'string',
+        description: 'End date DD/MM/YYYY (defaults to today)',
+        required: false,
+      },
+    ],
+    handler: async ({ indicator, date_from, date_to }) => {
+      const params: Record<string, unknown> = { indicator };
+      if (date_from) params.date_from = date_from;
+      if (date_to) params.date_to = date_to;
+      const result = await callTreasuryTool('get_cr_indicators', params);
+      return JSON.stringify(result);
+    },
+  });
+
   return null;
 }
