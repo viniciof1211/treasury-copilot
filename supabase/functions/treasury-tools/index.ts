@@ -293,6 +293,162 @@ async function recalcProjection(supabase: ReturnType<typeof createClient>, _para
   };
 }
 
+// ─── Web Search (Tavily API) ────────────────────────────────────────────────
+async function webSearch(params: Record<string, unknown>) {
+  const apiKey = Deno.env.get("TAVILY_API_KEY");
+  if (!apiKey) return { error: "TAVILY_API_KEY not configured. Get a free key at https://tavily.com" };
+
+  const query = (params.query as string) || "";
+  if (!query) return { error: "Missing query parameter" };
+
+  const searchDepth = (params.search_depth as string) || "basic";
+  const maxResults = Number(params.max_results) || 5;
+  const includeDomains = (params.include_domains as string[]) || [];
+
+  try {
+    const body: Record<string, unknown> = {
+      query,
+      search_depth: searchDepth,
+      max_results: maxResults,
+      include_answer: true,
+    };
+    if (includeDomains.length > 0) body.include_domains = includeDomains;
+
+    const res = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { error: `Tavily API: ${res.status} ${errText}` };
+    }
+
+    const data = await res.json();
+    return {
+      answer: data.answer || null,
+      results: (data.results || []).map((r: { title: string; url: string; content: string; score: number }) => ({
+        title: r.title,
+        url: r.url,
+        content: r.content,
+        score: r.score,
+      })),
+      query,
+    };
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+}
+
+// ─── Costa Rica Economic Indicators (BCCR API) ─────────────────────────────
+const BCCR_INDICATOR_CODES: Record<string, { codes: number[]; labels: string[] }> = {
+  tipo_cambio: { codes: [317, 318], labels: ["Tipo cambio compra USD/CRC", "Tipo cambio venta USD/CRC"] },
+  tasa_basica: { codes: [423], labels: ["Tasa básica pasiva"] },
+  ipc: { codes: [462], labels: ["Índice de precios al consumidor"] },
+  tpm: { codes: [3541], labels: ["Tasa de política monetaria"] },
+};
+
+async function getCRIndicators(params: Record<string, unknown>) {
+  const email = Deno.env.get("BCCR_EMAIL") || "";
+  const token = Deno.env.get("BCCR_TOKEN") || "";
+
+  if (!email || !token) {
+    return { error: "BCCR_EMAIL and BCCR_TOKEN not configured. Register free at https://www.bccr.fi.cr/indicadores-economicos/servicio-web" };
+  }
+
+  const indicator = (params.indicator as string) || "tipo_cambio";
+  const today = new Date();
+  const fmt = (d: Date) => `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+  const dateFrom = (params.date_from as string) || fmt(today);
+  const dateTo = (params.date_to as string) || fmt(today);
+
+  // Resolve indicator codes
+  let codes: number[];
+  let labels: string[];
+  const preset = BCCR_INDICATOR_CODES[indicator];
+  if (preset) {
+    codes = preset.codes;
+    labels = preset.labels;
+  } else {
+    // Custom numeric code
+    const num = Number(indicator);
+    if (isNaN(num)) return { error: `Unknown indicator: "${indicator}". Use: tipo_cambio, tasa_basica, ipc, tpm, or a numeric BCCR code.` };
+    codes = [num];
+    labels = [`Indicador ${num}`];
+  }
+
+  const results: { indicator: string; code: number; date: string; value: number | null }[] = [];
+
+  for (let i = 0; i < codes.length; i++) {
+    const code = codes[i];
+    const label = labels[i] || `Indicador ${code}`;
+    try {
+      const url = `https://gee.bccr.fi.cr/Indicadores/Suscripciones/WS/wsindicadoreseconomicos.asmx/ObtenerIndicadoresEconomicosXML` +
+        `?Indicador=${code}&FechaInicio=${encodeURIComponent(dateFrom)}&FechaFinal=${encodeURIComponent(dateTo)}` +
+        `&Nombre=treasury-copilot&SubNiveles=N&CorreoElectronico=${encodeURIComponent(email)}&Token=${encodeURIComponent(token)}`;
+
+      const res = await fetch(url);
+      if (!res.ok) {
+        results.push({ indicator: label, code, date: dateFrom, value: null });
+        continue;
+      }
+      let xml = await res.text();
+
+      // BCCR returns HTML-encoded XML inside a <string> wrapper — decode entities
+      xml = xml.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+
+      // Parse XML: extract <NUM_VALOR> values and <DES_FECHA> dates
+      const valueMatches = [...xml.matchAll(/<NUM_VALOR>([\d.,]+)<\/NUM_VALOR>/g)];
+      const dateMatches = [...xml.matchAll(/<DES_FECHA>([^<]+)<\/DES_FECHA>/g)];
+
+      if (valueMatches.length > 0) {
+        // Get the latest (last) value
+        const lastIdx = valueMatches.length - 1;
+        const rawVal = valueMatches[lastIdx][1].replace(/,/g, ".");
+        const dateStr = dateMatches[lastIdx]?.[1] || dateTo;
+        results.push({ indicator: label, code, date: dateStr.trim(), value: parseFloat(rawVal) });
+      } else {
+        // Try fetching yesterday if today has no data yet
+        if (dateFrom === dateTo) {
+          const yesterday = new Date(today);
+          yesterday.setDate(yesterday.getDate() - 1);
+          const yFmt = fmt(yesterday);
+          const url2 = `https://gee.bccr.fi.cr/Indicadores/Suscripciones/WS/wsindicadoreseconomicos.asmx/ObtenerIndicadoresEconomicosXML` +
+            `?Indicador=${code}&FechaInicio=${encodeURIComponent(yFmt)}&FechaFinal=${encodeURIComponent(yFmt)}` +
+            `&Nombre=treasury-copilot&SubNiveles=N&CorreoElectronico=${encodeURIComponent(email)}&Token=${encodeURIComponent(token)}`;
+          const res2 = await fetch(url2);
+          if (res2.ok) {
+            let xml2 = await res2.text();
+            xml2 = xml2.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+            const vm2 = [...xml2.matchAll(/<NUM_VALOR>([\d.,]+)<\/NUM_VALOR>/g)];
+            const dm2 = [...xml2.matchAll(/<DES_FECHA>([^<]+)<\/DES_FECHA>/g)];
+            if (vm2.length > 0) {
+              const li = vm2.length - 1;
+              results.push({ indicator: label, code, date: (dm2[li]?.[1] || yFmt).trim(), value: parseFloat(vm2[li][1].replace(/,/g, ".")) });
+              continue;
+            }
+          }
+        }
+        results.push({ indicator: label, code, date: dateFrom, value: null });
+      }
+    } catch (e) {
+      results.push({ indicator: label, code, date: dateFrom, value: null });
+      console.error(`BCCR error for code ${code}:`, (e as Error).message);
+    }
+  }
+
+  return {
+    indicators: results,
+    source: "Banco Central de Costa Rica (BCCR)",
+    date_range: { from: dateFrom, to: dateTo },
+  };
+}
+
+// ─── Gemini Image Generation ────────────────────────────────────────────────
 async function generateGeminiImage(spec: Record<string, unknown>) {
   const geminiKey = Deno.env.get("GEMINI_API_KEY");
   const model = Deno.env.get("GEMINI_IMAGE_MODEL") || "imagen-3.0-generate-002";
@@ -386,6 +542,14 @@ Deno.serve(async (req: Request) => {
       }
       case "generate_gemini_image": {
         const result = await generateGeminiImage((params || {}) as Record<string, unknown>);
+        return jsonResponse(result);
+      }
+      case "web_search": {
+        const result = await webSearch(params || {});
+        return jsonResponse(result);
+      }
+      case "get_cr_indicators": {
+        const result = await getCRIndicators(params || {});
         return jsonResponse(result);
       }
       default:
