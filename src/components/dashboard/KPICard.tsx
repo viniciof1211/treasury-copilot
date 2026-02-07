@@ -9,7 +9,7 @@ interface KPICardProps {
   trendLabel?: string;
   icon: LucideIcon;
   format?: 'currency' | 'number' | 'percent' | 'months' | 'weeks';
-  currency?: string;
+  currency?: string; // Default: CRC
   semaphore?: 'green' | 'yellow' | 'red';
   subtitle?: string;
 }
@@ -21,7 +21,7 @@ export function KPICard({
   trendLabel = 'vs mes anterior',
   icon: Icon,
   format = 'currency',
-  currency = 'USD',
+  currency = 'CRC',
   semaphore,
   subtitle,
 }: KPICardProps) {

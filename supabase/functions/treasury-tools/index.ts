@@ -509,7 +509,7 @@ async function recalcProjection(supabase: ReturnType<typeof createClient>, _para
 
   return {
     summary: months,
-    message: `Proyección 12M recalculada. Inflows base: ${inflows.toFixed(2)}, Outflows base: ${outflows.toFixed(2)}. Desembolso 25% por BU aplicado.`,
+    message: `Proyección 12M recalculada. Inflows base: ₡${inflows.toFixed(0)}, Outflows base: ₡${outflows.toFixed(0)}. Desembolso 25% por BU aplicado. Divisa: CRC.`,
   };
 }
 

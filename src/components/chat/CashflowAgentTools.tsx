@@ -74,11 +74,11 @@ export function CashflowAgentTools() {
           : '  (ninguno)',
         ``,
         `CxP Items: ${cxp.total || 0} registros, ${cxp.empresas || 0} empresas, ${cxp.proveedores || 0} proveedores`,
-        cxp.total_usd ? `  Total USD: $${Number(cxp.total_usd).toLocaleString()}` : '',
+        cxp.total_usd ? `  Total CRC: ₡${Number(cxp.total_usd).toLocaleString()}` : '',
         cxp.min_fecha ? `  Rango fechas: ${cxp.min_fecha} a ${cxp.max_fecha}` : '',
         ``,
         `Flujo Semanal: ${flujo.total || 0} operaciones, ${flujo.companias || 0} compañías`,
-        flujo.total_cuotas ? `  Total cuotas: $${Number(flujo.total_cuotas).toLocaleString()}` : '',
+        flujo.total_cuotas ? `  Total cuotas: ₡${Number(flujo.total_cuotas).toLocaleString()}` : '',
         flujo.min_venc ? `  Rango: ${flujo.min_venc} a ${flujo.max_venc}` : '',
         ``,
         `Proyección 12M: ${proj.total || 0} registros`,
@@ -189,7 +189,7 @@ export function CashflowAgentTools() {
       { name: 'data_summary', type: 'string', description: 'Essential values and ranges', required: true },
       { name: 'axes_labels', type: 'string', description: 'Axis labels', required: false },
       { name: 'time_range', type: 'string', description: 'Time period', required: false },
-      { name: 'units', type: 'string', description: 'USD, CRC, etc', required: false },
+      { name: 'units', type: 'string', description: 'CRC (default), USD, etc', required: false },
     ],
     handler: async ({ chart_type, data_summary, axes_labels, time_range, units }) => {
       const result = await callTreasuryTool('generate_gemini_image', {
