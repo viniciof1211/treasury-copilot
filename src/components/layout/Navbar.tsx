@@ -3,10 +3,10 @@ import { LayoutDashboard, MessageSquare, Database, Briefcase, Settings } from 'l
 import { useAuth } from '../../contexts/AuthContext';
 
 const navigation = [
-  { name: 'Dashboard', href: '/', icon: LayoutDashboard },
+  { name: 'Panel Ejecutivo', href: '/', icon: LayoutDashboard },
   { name: 'AI Chat', href: '/chat', icon: MessageSquare },
-  { name: 'Data Sources', href: '/data', icon: Database },
-  { name: 'Projects', href: '/projects', icon: Briefcase },
+  { name: 'Fuentes de Datos', href: '/data', icon: Database },
+  { name: 'Proyectos', href: '/projects', icon: Briefcase },
   { name: 'Admin', href: '/admin', icon: Settings },
 ];
 
