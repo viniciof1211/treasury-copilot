@@ -42,6 +42,15 @@ async function ingestExcel(supabase: ReturnType<typeof createClient>, fileId: st
 
   const arrayBuffer = await fileData.arrayBuffer();
 
+  // Guard: warn about large files but still attempt processing
+  const fileSizeMB = arrayBuffer.byteLength / 1024 / 1024;
+  if (fileSizeMB > 8) {
+    return {
+      ingest_run_id: null,
+      error: `File too large (${fileSizeMB.toFixed(1)} MB). Max ~8MB for Edge Function processing. Consider splitting the workbook into smaller files.`,
+    };
+  }
+
   const { data: ingestRow, error: insertErr } = await supabase
     .schema("bronze_finance")
     .from("ingest_runs")
@@ -91,25 +100,36 @@ async function ingestExcel(supabase: ReturnType<typeof createClient>, fileId: st
   };
 
   try {
-    const workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: "array" });
+    // Minimize memory: skip formulas, styles, and cap rows per sheet
+    const workbook = XLSX.read(new Uint8Array(arrayBuffer), {
+      type: "array",
+      sheetRows: 500,       // cap at 500 rows per sheet — sufficient for treasury data
+      cellFormula: false,    // don't parse formulas
+      cellHTML: false,       // don't generate HTML
+      cellStyles: false,     // don't read styles
+      cellDates: false,      // keep dates as numbers (we parse manually)
+    });
     let totalRows = 0;
     const sheetsProcessed: string[] = [];
 
     for (const sheetName of workbook.SheetNames) {
       const sheet = workbook.Sheets[sheetName];
+      if (!sheet) continue;
       const allRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as (string | number)[][];
+      // Free the raw sheet reference to reduce memory pressure
+      delete workbook.Sheets[sheetName];
 
       if (allRows.length < 2) continue;
 
       // Find header row: look for a row with many text cells (not a title/summary row)
-      // A real header has 5+ text labels and >50% of non-empty cells are text
+      // A real header has 3+ text labels and >40% of non-empty cells are text
       let headerIdx = -1;
       let header: string[] = [];
       for (let i = 0; i < Math.min(allRows.length, 20); i++) {
         const cells = allRows[i];
         const nonEmpty = cells.filter((c: string | number) => c !== "").length;
         const textCells = cells.filter((c: string | number) => typeof c === "string" && String(c).length > 1);
-        if (textCells.length >= 5 && nonEmpty >= 5 && textCells.length / nonEmpty > 0.5) {
+        if (textCells.length >= 3 && nonEmpty >= 3 && textCells.length / nonEmpty > 0.4) {
           headerIdx = i;
           header = cells.map(String);
           break;
@@ -247,6 +267,206 @@ async function ingestExcel(supabase: ReturnType<typeof createClient>, fileId: st
     }).eq("id", ingestRunId);
     return { ingest_run_id: ingestRunId, error: (e as Error).message };
   }
+}
+
+// ─── Ingest pre-parsed data (client-side XLSX parsing) ──────────────────────
+// Accepts headers + rows + detected format from the browser. No XLSX parsing needed.
+async function ingestParsedData(
+  supabase: ReturnType<typeof createClient>,
+  params: Record<string, unknown>
+) {
+  const sourceFile = (params.source_file as string) || "unknown";
+  const sheets = params.sheets as Array<{
+    name: string;
+    format: string; // "cxp" | "flujo" | "generic"
+    headers: string[];
+    rows: (string | number | null)[][];
+  }>;
+
+  if (!sheets || !Array.isArray(sheets) || sheets.length === 0) {
+    return { ingest_run_id: null, error: "No sheets data provided" };
+  }
+
+  // Create ingest run
+  const { data: ingestRow, error: insertErr } = await supabase
+    .schema("bronze_finance")
+    .from("ingest_runs")
+    .insert({ source_file: sourceFile, status: "processing" })
+    .select("id")
+    .single();
+
+  if (insertErr) {
+    return { ingest_run_id: null, error: `Could not create ingest run: ${insertErr.message}` };
+  }
+  const ingestRunId = ingestRow?.id;
+
+  const toDate = (v: unknown): string | null => {
+    if (v == null || v === "") return null;
+    if (typeof v === "number" && v > 10000) {
+      const d = new Date((v - 25569) * 86400000);
+      return d.toISOString().slice(0, 10);
+    }
+    if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10);
+    if (typeof v === "string" && /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(v)) {
+      const d = new Date(v);
+      if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    }
+    return null;
+  };
+
+  const colIndex = (header: string[], keys: string[]): number => {
+    for (const k of keys) {
+      const idx = header.findIndex((h) => String(h).toLowerCase().includes(k.toLowerCase()));
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
+
+  let totalRows = 0;
+  const sheetsProcessed: string[] = [];
+
+  for (const sheet of sheets) {
+    const { name: sheetName, format, headers: header, rows: dataRows } = sheet;
+    if (!header || header.length < 2 || !dataRows || dataRows.length === 0) continue;
+
+    if (format === "cxp") {
+      const items = dataRows.map((row) => {
+        const get = (keys: string[]) => {
+          const i = colIndex(header, keys);
+          return i >= 0 ? row[i] : null;
+        };
+        return {
+          ingest_run_id: ingestRunId,
+          empresa: get(["Empresa"]),
+          negocio: get(["Negocio"]),
+          responsable: get(["Responsable"]),
+          vencimiento_fecha: toDate(get(["Vencimiento Fecha", "Vencimiento"])),
+          fecha_max_pago: toDate(get(["Fecha Max", "Fecha Máx"])),
+          vencidos_dias: Number(get(["Vencidos Días", "Vencidos"])) || null,
+          prioridad: get(["Prioridad"]) ? String(get(["Prioridad"])) : null,
+          monto_usd: Number(get(["Monto en $", "Monto"])) || null,
+          original_moneda: get(["Original Moneda", "Moneda"]) ? String(get(["Original Moneda", "Moneda"])) : null,
+          monto_original: Number(get(["Monto en Original", "Monto Original"])) || null,
+          tipo_proveedor: get(["Tipo de Proveedor", "Tipo Proveedor"]) ? String(get(["Tipo de Proveedor", "Tipo Proveedor"])) : null,
+          proveedor: get(["Proveedor"]) ? String(get(["Proveedor"])) : null,
+          detalle: get(["Detalle"]) ? String(get(["Detalle"])) : null,
+          clasificacion: get(["Clasificación", "Clasificacion"]) ? String(get(["Clasificación", "Clasificacion"])) : null,
+          observacion: get(["Observación", "Observacion"]) ? String(get(["Observación", "Observacion"])) : null,
+        };
+      }).filter((x) => x.proveedor || x.monto_usd);
+
+      let batchInserted = 0;
+      let lastError: string | null = null;
+      for (let b = 0; b < items.length; b += 50) {
+        const batch = items.slice(b, b + 50);
+        const { error: insErr } = await supabase.schema("silver_finance").from("cxp_items").insert(batch);
+        if (insErr) { lastError = insErr.message; } else { batchInserted += batch.length; }
+      }
+      if (batchInserted > 0) {
+        totalRows += batchInserted;
+        sheetsProcessed.push(`${sheetName}(CxP:${batchInserted}${lastError ? ",partial" : ""})`);
+      } else if (lastError) {
+        sheetsProcessed.push(`${sheetName}(CxP:ERROR:${lastError.slice(0, 100)})`);
+      }
+    } else if (format === "flujo") {
+      const items = dataRows.map((row) => {
+        const get = (keys: string[]) => {
+          const i = colIndex(header, keys);
+          return i >= 0 ? row[i] : null;
+        };
+        return {
+          ingest_run_id: ingestRunId,
+          compania: get(["Compañía", "Compania", "Empresa"]) ? String(get(["Compañía", "Compania", "Empresa"])) : null,
+          tipo: get(["Tipo"]) ? String(get(["Tipo"])) : null,
+          operacion: get(["Operación", "Operacion"]) ? String(get(["Operación", "Operacion"])) : null,
+          vencimiento: toDate(get(["Vencimiento"])),
+          saldo_original: Number(get(["Saldo original", "Saldo"])) || null,
+          principal: Number(get(["Principal"])) || null,
+          intereses: Number(get(["Intereses"])) || null,
+          cuota: Number(get(["Cuota"])) || null,
+          capital: Number(get(["Capital"])) || null,
+          capital_actualizado: Number(get(["Capital actualizado"])) || null,
+          moneda: get(["Moneda"]) ? String(get(["Moneda"])) : null,
+          banco: get(["Banco"]) ? String(get(["Banco"])) : null,
+          observaciones: get(["Observaciones"]) ? String(get(["Observaciones"])) : null,
+        };
+      }).filter((x) => x.operacion || x.cuota || x.principal);
+
+      let batchInserted = 0;
+      let lastError: string | null = null;
+      for (let b = 0; b < items.length; b += 50) {
+        const batch = items.slice(b, b + 50);
+        const { error: insErr } = await supabase.schema("silver_finance").from("flujo_semanal").insert(batch);
+        if (insErr) { lastError = insErr.message; } else { batchInserted += batch.length; }
+      }
+      if (batchInserted > 0) {
+        totalRows += batchInserted;
+        sheetsProcessed.push(`${sheetName}(Flujo:${batchInserted}${lastError ? ",partial" : ""})`);
+      } else if (lastError) {
+        sheetsProcessed.push(`${sheetName}(Flujo:ERROR:${lastError.slice(0, 100)})`);
+      }
+    } else {
+      // Generic format — store as flujo_semanal with best-effort column mapping
+      // Map whatever columns are available
+      const items = dataRows.map((row) => {
+        const get = (keys: string[]) => {
+          const i = colIndex(header, keys);
+          return i >= 0 ? row[i] : null;
+        };
+        return {
+          ingest_run_id: ingestRunId,
+          compania: get(["Compañía", "Compania", "Empresa", "Unidad", "BU"]) ? String(get(["Compañía", "Compania", "Empresa", "Unidad", "BU"])) : null,
+          tipo: get(["Tipo", "Categoría", "Categoria"]) ? String(get(["Tipo", "Categoría", "Categoria"])) : null,
+          operacion: get(["Operación", "Operacion", "Descripción", "Descripcion", "Concepto"]) ? String(get(["Operación", "Operacion", "Descripción", "Descripcion", "Concepto"])) : null,
+          vencimiento: toDate(get(["Vencimiento", "Fecha", "Date"])),
+          saldo_original: Number(get(["Saldo original", "Saldo", "Balance"])) || null,
+          principal: Number(get(["Principal", "Monto", "Amount"])) || null,
+          intereses: Number(get(["Intereses", "Interés"])) || null,
+          cuota: Number(get(["Cuota", "Pago", "Payment"])) || null,
+          capital: Number(get(["Capital"])) || null,
+          capital_actualizado: Number(get(["Capital actualizado"])) || null,
+          moneda: get(["Moneda", "Currency"]) ? String(get(["Moneda", "Currency"])) : null,
+          banco: get(["Banco", "Bank", "Entidad"]) ? String(get(["Banco", "Bank", "Entidad"])) : null,
+          observaciones: get(["Observaciones", "Notas", "Comentarios"]) ? String(get(["Observaciones", "Notas", "Comentarios"])) : sheetName,
+        };
+      }).filter((x) => {
+        // Keep rows with at least one meaningful non-null field
+        return x.compania || x.operacion || x.cuota || x.principal || x.saldo_original;
+      });
+
+      let batchInserted = 0;
+      let lastError: string | null = null;
+      for (let b = 0; b < items.length; b += 50) {
+        const batch = items.slice(b, b + 50);
+        const { error: insErr } = await supabase.schema("silver_finance").from("flujo_semanal").insert(batch);
+        if (insErr) { lastError = insErr.message; } else { batchInserted += batch.length; }
+      }
+      if (batchInserted > 0) {
+        totalRows += batchInserted;
+        sheetsProcessed.push(`${sheetName}(Generic:${batchInserted}${lastError ? ",partial" : ""})`);
+      } else if (lastError) {
+        sheetsProcessed.push(`${sheetName}(Generic:ERROR:${lastError.slice(0, 100)})`);
+      }
+    }
+  }
+
+  await supabase.schema("bronze_finance").from("ingest_runs").update({
+    status: totalRows > 0 ? "completed" : "failed",
+    rows_inserted: totalRows,
+    completed_at: new Date().toISOString(),
+    metadata: { sheets_processed: sheetsProcessed, parsing: "client-side" },
+    error_message: totalRows === 0 ? "No rows matched known formats" : null,
+  }).eq("id", ingestRunId);
+
+  return {
+    ingest_run_id: ingestRunId,
+    rows_inserted: totalRows,
+    source_file: sourceFile,
+    sheets_processed: sheetsProcessed,
+    message: totalRows > 0
+      ? `Ingested ${totalRows} rows from ${sheetsProcessed.length} sheet(s).`
+      : "No recognizable treasury data found in the parsed sheets.",
+  };
 }
 
 async function recalcProjection(supabase: ReturnType<typeof createClient>, _params: Record<string, unknown>) {
@@ -534,6 +754,10 @@ Deno.serve(async (req: Request) => {
       case "ingest_excel": {
         const fileId = (params?.file_id as string) || "latest";
         const result = await ingestExcel(supabase, fileId);
+        return jsonResponse(result);
+      }
+      case "ingest_parsed_data": {
+        const result = await ingestParsedData(supabase, params || {});
         return jsonResponse(result);
       }
       case "recalc_projection": {

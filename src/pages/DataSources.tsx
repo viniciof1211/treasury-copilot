@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Upload, FileSpreadsheet, RefreshCw, CheckCircle, XCircle, Clock, Trash2, AlertCircle, Database, ShieldAlert } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { Layout } from '../components/layout/Layout';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -177,20 +178,154 @@ export function DataSources() {
     }
   };
 
+  /**
+   * Parse XLSX/CSV client-side (browser has plenty of memory),
+   * detect format, and send structured JSON to the Edge Function.
+   * Falls back to server-side parsing for small files (<1MB).
+   */
   const handleIngest = async (fileName: string) => {
     setIngesting(fileName);
     setError('');
     setSuccess('');
 
     try {
-      const result = await callTreasuryTool('ingest_excel', { file_id: fileName });
+      // Download the file from Supabase Storage
+      const { data: fileBlob, error: dlErr } = await supabase.storage
+        .from('treasury-files')
+        .download(fileName);
+
+      if (dlErr || !fileBlob) {
+        throw new Error(dlErr?.message || 'Failed to download file');
+      }
+
+      // For small files (<1MB), use the server-side Edge Function directly
+      if (fileBlob.size < 1024 * 1024) {
+        const result = await callTreasuryTool('ingest_excel', { file_id: fileName });
+        if (result.error) {
+          setError(`Ingest failed: ${result.error}`);
+        } else {
+          setSuccess(
+            `Ingested "${fileName}": ${result.rows_inserted} rows processed. Run ID: ${result.ingest_run_id}`
+          );
+          await fetchIngestRuns();
+        }
+        return;
+      }
+
+      // Client-side XLSX parsing for larger files
+      const arrayBuffer = await fileBlob.arrayBuffer();
+      const workbook = XLSX.read(new Uint8Array(arrayBuffer), {
+        type: 'array',
+        cellFormula: false,
+        cellHTML: false,
+        cellStyles: false,
+      });
+
+      const colIndex = (header: string[], keys: string[]): number => {
+        for (const k of keys) {
+          const idx = header.findIndex((h) => String(h).toLowerCase().includes(k.toLowerCase()));
+          if (idx >= 0) return idx;
+        }
+        return -1;
+      };
+
+      const isSubHeader = (row: (string | number)[], headerTexts: Set<string>): boolean => {
+        const rowTexts = row
+          .filter((c) => typeof c === 'string' && String(c).length > 2)
+          .map((c) => String(c).toLowerCase().trim());
+        return rowTexts.filter((t) => headerTexts.has(t)).length >= 3;
+      };
+
+      // Process each sheet
+      const sheets: Array<{
+        name: string;
+        format: string;
+        headers: string[];
+        rows: (string | number | null)[][];
+      }> = [];
+
+      for (const sheetName of workbook.SheetNames) {
+        const sheet = workbook.Sheets[sheetName];
+        if (!sheet) continue;
+
+        const allRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as (
+          | string
+          | number
+        )[][];
+
+        // Free memory
+        delete workbook.Sheets[sheetName];
+
+        if (allRows.length < 2) continue;
+
+        // Find header row
+        let headerIdx = -1;
+        let header: string[] = [];
+        for (let i = 0; i < Math.min(allRows.length, 20); i++) {
+          const cells = allRows[i];
+          const nonEmpty = cells.filter((c) => c !== '').length;
+          const textCells = cells.filter(
+            (c) => typeof c === 'string' && String(c).length > 1
+          );
+          if (textCells.length >= 3 && nonEmpty >= 3 && textCells.length / nonEmpty > 0.4) {
+            headerIdx = i;
+            header = cells.map(String);
+            break;
+          }
+        }
+        if (headerIdx < 0 || header.length < 2) continue;
+
+        const headerTexts = new Set(
+          header.filter((h) => typeof h === 'string' && h.length > 2).map((h) => h.toLowerCase().trim())
+        );
+
+        const dataRows = allRows
+          .slice(headerIdx + 1)
+          .filter((r) => r.some((c) => c !== ''))
+          .filter((r) => !isSubHeader(r, headerTexts));
+
+        // Detect format
+        const cxpScore = ['Empresa', 'Proveedor', 'Monto', 'Vencimiento', 'Prioridad'].filter(
+          (k) => colIndex(header, [k]) >= 0
+        ).length;
+
+        const flujoScore = [
+          'Compañía',
+          'Operación',
+          'Principal',
+          'Intereses',
+          'Cuota',
+          'Capital',
+        ].filter((k) => colIndex(header, [k]) >= 0).length;
+
+        let format = 'generic';
+        if (cxpScore >= 3) format = 'cxp';
+        else if (flujoScore >= 3) format = 'flujo';
+
+        sheets.push({
+          name: sheetName,
+          format,
+          headers: header,
+          rows: dataRows,
+        });
+      }
+
+      if (sheets.length === 0) {
+        setError('No recognizable sheet data found in the file.');
+        return;
+      }
+
+      // Send parsed data to Edge Function
+      const result = await callTreasuryTool('ingest_parsed_data', {
+        source_file: fileName,
+        sheets,
+      });
 
       if (result.error) {
         setError(`Ingest failed: ${result.error}`);
       } else {
         setSuccess(
-          `Ingested "${fileName}": ${result.rows_inserted} rows processed. ` +
-            `Run ID: ${result.ingest_run_id}`
+          `Ingested "${fileName}": ${result.rows_inserted} rows processed from ${result.sheets_processed?.length || 0} sheet(s). Run ID: ${result.ingest_run_id}`
         );
         await fetchIngestRuns();
       }
