@@ -61,65 +61,132 @@ async function ingestExcel(supabase: ReturnType<typeof createClient>, fileId: st
   }
   const ingestRunId = ingestRow?.id;
 
+  const toDate = (v: unknown): string | null => {
+    if (typeof v === "number" && v > 10000) {
+      const d = new Date((v - 25569) * 86400000);
+      return d.toISOString().slice(0, 10);
+    }
+    return v ? String(v) : null;
+  };
+
+  const colIndex = (header: string[], keys: string[]): number => {
+    for (const k of keys) {
+      const idx = header.findIndex((h) => String(h).toLowerCase().includes(k.toLowerCase()));
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
+
   try {
     const workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: "array" });
     let totalRows = 0;
+    const sheetsProcessed: string[] = [];
 
     for (const sheetName of workbook.SheetNames) {
       const sheet = workbook.Sheets[sheetName];
-      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as (string | number)[][];
+      const allRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as (string | number)[][];
 
-      if (rows.length < 2) continue;
-      const header = rows[0] as string[];
-      const cxpCols = ["Empresa", "Negocio", "Proveedor", "Monto en $", "Vencimiento Fecha", "Prioridad"];
-      const isCxp = cxpCols.some((c) => header.some((h) => String(h).includes(c)));
+      if (allRows.length < 2) continue;
 
-      if (isCxp) {
-        const toDate = (v: unknown) => {
-          if (typeof v === "number" && v > 10000) {
-            const d = new Date((v - 25569) * 86400000);
-            return d.toISOString().slice(0, 10);
-          }
-          return v ? String(v) : null;
-        };
-        const items = rows.slice(1)
-          .filter((r) => r && (r as any[]).some((c) => c !== ""))
-          .map((r) => {
-            const row = r as (string | number)[];
-            const get = (keys: string[]) => {
-              const i = keys.findIndex((k) => header.some((h) => String(h).toLowerCase().includes(k.toLowerCase())));
-              return i >= 0 && header[i] !== undefined ? row[header.indexOf(header[i])] : null;
-            };
-            return {
-              ingest_run_id: ingestRunId,
-              empresa: get(["Empresa"]),
-              negocio: get(["Negocio"]),
-              proveedor: get(["Proveedor"]),
-              monto_usd: get(["Monto en $"]) ?? get(["monto"]),
-              vencimiento_fecha: toDate(get(["Vencimiento Fecha", "Vencimiento"])),
-              prioridad: get(["Prioridad"]),
-              responsable: get(["Responsable"]),
-              detalle: get(["Detalle"]),
-              clasificacion: get(["Clasificación"]),
-              observacion: get(["Observación"]),
-            };
-          })
-          .filter((x) => x.proveedor || x.monto_usd);
+      // Find header row (first row with 3+ non-empty cells)
+      let headerIdx = -1;
+      let header: string[] = [];
+      for (let i = 0; i < Math.min(allRows.length, 10); i++) {
+        const nonEmpty = allRows[i].filter((c) => c !== "").length;
+        if (nonEmpty >= 3) {
+          const hasText = allRows[i].some((c) => typeof c === "string" && c.length > 1);
+          if (hasText) { headerIdx = i; header = allRows[i].map(String); break; }
+        }
+      }
+      if (headerIdx < 0 || header.length < 3) continue;
+      const dataRows = allRows.slice(headerIdx + 1).filter((r) => r.some((c) => c !== ""));
+
+      // Detect CxP format
+      const cxpScore = ["Empresa", "Proveedor", "Monto", "Vencimiento", "Prioridad"]
+        .filter((k) => colIndex(header, [k]) >= 0).length;
+
+      // Detect Flujo Semanal format
+      const flujoScore = ["Compañía", "Operación", "Principal", "Intereses", "Cuota", "Capital"]
+        .filter((k) => colIndex(header, [k]) >= 0).length;
+
+      if (cxpScore >= 3) {
+        const items = dataRows.map((row) => {
+          const get = (keys: string[]) => {
+            const i = colIndex(header, keys);
+            return i >= 0 ? row[i] : null;
+          };
+          return {
+            ingest_run_id: ingestRunId,
+            empresa: get(["Empresa"]),
+            negocio: get(["Negocio"]),
+            responsable: get(["Responsable"]),
+            vencimiento_fecha: toDate(get(["Vencimiento Fecha", "Vencimiento"])),
+            fecha_max_pago: toDate(get(["Fecha Max", "Fecha Máx"])),
+            vencidos_dias: Number(get(["Vencidos Días", "Vencidos"])) || null,
+            prioridad: get(["Prioridad"]) ? String(get(["Prioridad"])) : null,
+            monto_usd: Number(get(["Monto en $", "Monto"])) || null,
+            original_moneda: get(["Original Moneda", "Moneda"]) ? String(get(["Original Moneda", "Moneda"])) : null,
+            monto_original: Number(get(["Monto en Original", "Monto Original"])) || null,
+            tipo_proveedor: get(["Tipo de Proveedor", "Tipo Proveedor"]) ? String(get(["Tipo de Proveedor", "Tipo Proveedor"])) : null,
+            proveedor: get(["Proveedor"]) ? String(get(["Proveedor"])) : null,
+            detalle: get(["Detalle"]) ? String(get(["Detalle"])) : null,
+            clasificacion: get(["Clasificación", "Clasificacion"]) ? String(get(["Clasificación", "Clasificacion"])) : null,
+            observacion: get(["Observación", "Observacion"]) ? String(get(["Observación", "Observacion"])) : null,
+          };
+        }).filter((x) => x.proveedor || x.monto_usd);
 
         if (items.length > 0) {
           const { error: insErr } = await supabase.schema("silver_finance").from("cxp_items").insert(items);
-          if (!insErr) totalRows += items.length;
+          if (!insErr) { totalRows += items.length; sheetsProcessed.push(`${sheetName}(CxP:${items.length})`); }
+        }
+      } else if (flujoScore >= 3) {
+        const items = dataRows.map((row) => {
+          const get = (keys: string[]) => {
+            const i = colIndex(header, keys);
+            return i >= 0 ? row[i] : null;
+          };
+          return {
+            ingest_run_id: ingestRunId,
+            compania: get(["Compañía", "Compania", "Empresa"]) ? String(get(["Compañía", "Compania", "Empresa"])) : null,
+            tipo: get(["Tipo"]) ? String(get(["Tipo"])) : null,
+            operacion: get(["Operación", "Operacion"]) ? String(get(["Operación", "Operacion"])) : null,
+            vencimiento: toDate(get(["Vencimiento"])),
+            saldo_original: Number(get(["Saldo original", "Saldo"])) || null,
+            principal: Number(get(["Principal"])) || null,
+            intereses: Number(get(["Intereses"])) || null,
+            cuota: Number(get(["Cuota"])) || null,
+            capital: Number(get(["Capital"])) || null,
+            capital_actualizado: Number(get(["Capital actualizado"])) || null,
+            moneda: get(["Moneda"]) ? String(get(["Moneda"])) : null,
+            banco: get(["Banco"]) ? String(get(["Banco"])) : null,
+            observaciones: get(["Observaciones"]) ? String(get(["Observaciones"])) : null,
+          };
+        }).filter((x) => x.operacion || x.cuota || x.principal);
+
+        if (items.length > 0) {
+          const { error: insErr } = await supabase.schema("silver_finance").from("flujo_semanal").insert(items);
+          if (!insErr) { totalRows += items.length; sheetsProcessed.push(`${sheetName}(Flujo:${items.length})`); }
         }
       }
+      // If neither CxP nor Flujo, skip — we don't ingest unknown formats
     }
 
     await supabase.schema("bronze_finance").from("ingest_runs").update({
       status: "completed",
       rows_inserted: totalRows,
       completed_at: new Date().toISOString(),
+      metadata: { sheets_processed: sheetsProcessed },
     }).eq("id", ingestRunId);
 
-    return { ingest_run_id: ingestRunId, rows_inserted: totalRows, source_file: path };
+    return {
+      ingest_run_id: ingestRunId,
+      rows_inserted: totalRows,
+      source_file: path,
+      sheets_processed: sheetsProcessed,
+      message: totalRows > 0
+        ? `Ingested ${totalRows} rows from ${sheetsProcessed.length} sheet(s).`
+        : "No recognizable treasury data found. Expected CxP (Empresa/Proveedor/Monto) or Flujo Semanal (Compañía/Operación/Cuota) columns.",
+    };
   } catch (e) {
     await supabase.schema("bronze_finance").from("ingest_runs").update({
       status: "failed",

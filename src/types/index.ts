@@ -200,6 +200,20 @@ export interface ChatMessage {
   created_at: string;
 }
 
+export interface IngestRun {
+  id: string;
+  source_file: string;
+  source_sheet?: string;
+  file_bucket?: string;
+  file_path?: string;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  rows_inserted: number;
+  error_message?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+  completed_at?: string;
+}
+
 export interface AuditLog {
   id: string;
   user_id?: string;
