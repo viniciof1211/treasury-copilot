@@ -162,9 +162,47 @@ VALUES (
   'treasury-files',
   false,
   52428800,
-  ARRAY['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/csv']::text[]
+  ARRAY[
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-excel',
+    'text/csv',
+    'application/octet-stream'
+  ]::text[]
 )
 ON CONFLICT (id) DO NOTHING;
+
+-- Storage bucket for AI-generated images
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'ai-images',
+  'ai-images',
+  true,
+  10485760,
+  ARRAY['image/png', 'image/jpeg', 'image/webp']::text[]
+)
+ON CONFLICT (id) DO NOTHING;
+
+-- Storage RLS: allow anon/authenticated to upload, read, and delete from treasury-files
+CREATE POLICY "Allow upload to treasury-files"
+  ON storage.objects FOR INSERT
+  WITH CHECK (bucket_id = 'treasury-files');
+
+CREATE POLICY "Allow read from treasury-files"
+  ON storage.objects FOR SELECT
+  USING (bucket_id = 'treasury-files');
+
+CREATE POLICY "Allow delete from treasury-files"
+  ON storage.objects FOR DELETE
+  USING (bucket_id = 'treasury-files');
+
+-- Storage RLS: allow public read and service-role write for ai-images
+CREATE POLICY "Allow public read from ai-images"
+  ON storage.objects FOR SELECT
+  USING (bucket_id = 'ai-images');
+
+CREATE POLICY "Allow upload to ai-images"
+  ON storage.objects FOR INSERT
+  WITH CHECK (bucket_id = 'ai-images');
 
 -- RPC for read-only SQL (bronze_finance, silver_finance, dim only)
 CREATE OR REPLACE FUNCTION public.exec_sql(sql_query text)

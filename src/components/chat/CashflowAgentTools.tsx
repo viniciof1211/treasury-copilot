@@ -4,15 +4,22 @@ import { useCopilotAction, useCopilotReadable } from '@copilotkit/react-core';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-function callTreasuryTool(tool: string, params: Record<string, unknown>) {
-  return fetch(`${SUPABASE_URL}/functions/v1/treasury-tools`, {
+async function callTreasuryTool(tool: string, params: Record<string, unknown>) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/treasury-tools`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
     },
     body: JSON.stringify({ tool, params }),
-  }).then((r) => r.json());
+  });
+  if (!res.ok) {
+    if (res.status === 404) {
+      return { error: 'Edge Function "treasury-tools" not deployed. Deploy with: npx supabase functions deploy treasury-tools', rows: [] };
+    }
+    return { error: `Edge Function error: ${res.status} ${res.statusText}`, rows: [] };
+  }
+  return res.json();
 }
 
 export function CashflowAgentTools() {
