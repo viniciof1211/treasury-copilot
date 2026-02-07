@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Upload, FileSpreadsheet, RefreshCw, CheckCircle, XCircle, Clock, Trash2, AlertCircle, Database } from 'lucide-react';
+import { Upload, FileSpreadsheet, RefreshCw, CheckCircle, XCircle, Clock, Trash2, AlertCircle, Database, ShieldAlert } from 'lucide-react';
 import { Layout } from '../components/layout/Layout';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -12,21 +12,34 @@ import type { IngestRun } from '../types';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-function callTreasuryTool(tool: string, params: Record<string, unknown>) {
-  return fetch(`${SUPABASE_URL}/functions/v1/treasury-tools`, {
+async function callTreasuryTool(tool: string, params: Record<string, unknown>) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/treasury-tools`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
     },
     body: JSON.stringify({ tool, params }),
-  }).then((r) => r.json());
+  });
+  if (!res.ok) {
+    if (res.status === 404) {
+      throw new Error('Edge Function "treasury-tools" not deployed. Run: npx supabase functions deploy treasury-tools');
+    }
+    throw new Error(`Edge Function error: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
 }
 
 interface StorageFile {
   name: string;
   created_at: string;
   metadata?: { size?: number; mimetype?: string };
+}
+
+interface InfraStatus {
+  bucket: 'ok' | 'missing' | 'checking';
+  edgeFunction: 'ok' | 'missing' | 'checking';
+  schema: 'ok' | 'missing' | 'checking';
 }
 
 export function DataSources() {
@@ -38,7 +51,47 @@ export function DataSources() {
   const [loadingRuns, setLoadingRuns] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [infra, setInfra] = useState<InfraStatus>({ bucket: 'checking', edgeFunction: 'checking', schema: 'checking' });
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Check infrastructure on mount
+  useEffect(() => {
+    (async () => {
+      const status: InfraStatus = { bucket: 'checking', edgeFunction: 'checking', schema: 'checking' };
+
+      // Check storage bucket
+      try {
+        const { error: bucketErr } = await supabase.storage.from('treasury-files').list('', { limit: 1 });
+        status.bucket = bucketErr ? 'missing' : 'ok';
+      } catch {
+        status.bucket = 'missing';
+      }
+
+      // Check Edge Function
+      try {
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/treasury-tools`, {
+          method: 'OPTIONS',
+          headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+        });
+        // 404 = not deployed, 200/204 = CORS preflight OK
+        status.edgeFunction = res.status === 404 ? 'missing' : 'ok';
+      } catch {
+        status.edgeFunction = 'missing';
+      }
+
+      // Check schema (exec_sql RPC)
+      try {
+        const { error: rpcErr } = await supabase.rpc('exec_sql', { sql_query: 'SELECT 1 as test' });
+        status.schema = rpcErr ? 'missing' : 'ok';
+      } catch {
+        status.schema = 'missing';
+      }
+
+      setInfra(status);
+    })();
+  }, []);
+
+  const hasInfraIssues = infra.bucket === 'missing' || infra.edgeFunction === 'missing' || infra.schema === 'missing';
 
   const fetchFiles = useCallback(async () => {
     setLoadingFiles(true);
@@ -46,7 +99,13 @@ export function DataSources() {
       const { data, error: listErr } = await supabase.storage
         .from('treasury-files')
         .list('', { limit: 100, sortBy: { column: 'created_at', order: 'desc' } });
-      if (listErr) throw listErr;
+      if (listErr) {
+        if (listErr.message?.includes('not found') || listErr.message?.includes('Bucket')) {
+          console.warn('Storage bucket "treasury-files" does not exist. Create it in Supabase Dashboard → Storage.');
+        } else {
+          throw listErr;
+        }
+      }
       setFiles((data || []).filter((f) => f.name && !f.name.startsWith('.')));
     } catch (e) {
       console.error('Error listing files:', e);
@@ -101,7 +160,12 @@ export function DataSources() {
           upsert: false,
         });
 
-      if (uploadErr) throw uploadErr;
+      if (uploadErr) {
+        if (uploadErr.message?.includes('not found') || uploadErr.message?.includes('Bucket')) {
+          throw new Error('Storage bucket "treasury-files" does not exist. Apply the SQL migration or create the bucket in Supabase Dashboard → Storage.');
+        }
+        throw uploadErr;
+      }
 
       setSuccess(`File "${file.name}" uploaded successfully. Click "Ingest" to process it.`);
       await fetchFiles();
@@ -220,6 +284,42 @@ export function DataSources() {
             />
           </div>
         </div>
+
+        {/* Infrastructure status banner */}
+        {hasInfraIssues && (
+          <Card className="border-amber-300 bg-amber-50">
+            <CardContent className="p-4">
+              <div className="flex items-start gap-3">
+                <ShieldAlert className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
+                <div className="space-y-2">
+                  <p className="font-medium text-amber-800">Infrastructure Setup Required</p>
+                  <p className="text-sm text-amber-700">The following components need to be configured in your Supabase project:</p>
+                  <ul className="text-sm text-amber-700 space-y-1 list-disc list-inside">
+                    {infra.schema === 'missing' && (
+                      <li>
+                        <strong>Database migration</strong> — Run the SQL in{' '}
+                        <code className="bg-amber-100 px-1 rounded text-xs">supabase/migrations/20260206120000_treasury_finance_schema.sql</code>{' '}
+                        via <strong>Supabase Dashboard → SQL Editor</strong>
+                      </li>
+                    )}
+                    {infra.bucket === 'missing' && (
+                      <li>
+                        <strong>Storage bucket "treasury-files"</strong> — Created by the migration above, or manually via{' '}
+                        <strong>Supabase Dashboard → Storage → New Bucket</strong>
+                      </li>
+                    )}
+                    {infra.edgeFunction === 'missing' && (
+                      <li>
+                        <strong>Edge Function "treasury-tools"</strong> — Deploy with:{' '}
+                        <code className="bg-amber-100 px-1 rounded text-xs">npx supabase login && npx supabase link --project-ref aanhzgezgyawitpvwrcw && npx supabase functions deploy treasury-tools</code>
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Status messages */}
         {error && (

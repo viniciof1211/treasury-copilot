@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { Dashboard } from './pages/Dashboard';
@@ -5,8 +6,13 @@ import { Chat } from './pages/Chat';
 import { DataSources } from './pages/DataSources';
 import { Projects } from './pages/Projects';
 import { Admin } from './pages/Admin';
+import { ensureStorageBuckets } from './lib/supabase';
 
 function App() {
+  useEffect(() => {
+    ensureStorageBuckets();
+  }, []);
+
   return (
     <AuthProvider>
       <BrowserRouter>
