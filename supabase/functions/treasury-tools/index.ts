@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import * as XLSX from "npm:xlsx@0.18.5";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -27,7 +28,7 @@ async function ingestExcel(supabase: ReturnType<typeof createClient>, fileId: st
 
   if (fileId === "latest") {
     const { data: files } = await supabase.storage.from(bucket).list("", { limit: 10, sortBy: { column: "created_at", order: "desc" } });
-    const xlsx = (files || []).find((f) => f.name?.endsWith(".xlsx"));
+    const xlsx = (files || []).find((f: { name?: string }) => f.name?.endsWith(".xlsx"));
     if (!xlsx) return { ingest_run_id: null, error: "No XLSX files in storage. Upload to treasury-files bucket." };
     path = xlsx.name;
   } else {
@@ -40,14 +41,6 @@ async function ingestExcel(supabase: ReturnType<typeof createClient>, fileId: st
   }
 
   const arrayBuffer = await fileData.arrayBuffer();
-  const XLSX = await import("https://cdn.sheetjs.com/xlsx-0.20.0/package/xlsx.mjs");
-
-  const run = {
-    source_file: path,
-    source_sheet: null as string | null,
-    status: "processing",
-    rows_inserted: 0,
-  };
 
   const { data: ingestRow, error: insertErr } = await supabase
     .schema("bronze_finance")
@@ -57,16 +50,36 @@ async function ingestExcel(supabase: ReturnType<typeof createClient>, fileId: st
     .single();
 
   if (insertErr) {
-    return { ingest_run_id: null, error: `Could not create ingest run: ${insertErr.message}. Ensure bronze_finance schema is exposed in Supabase.` };
+    return { ingest_run_id: null, error: `Could not create ingest run: ${insertErr.message}` };
   }
   const ingestRunId = ingestRow?.id;
 
   const toDate = (v: unknown): string | null => {
+    if (v == null || v === "") return null;
+    // Excel serial date number
     if (typeof v === "number" && v > 10000) {
       const d = new Date((v - 25569) * 86400000);
       return d.toISOString().slice(0, 10);
     }
-    return v ? String(v) : null;
+    // ISO date string (yyyy-mm-dd)
+    if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v)) {
+      return v.slice(0, 10);
+    }
+    // Date-like string (dd/mm/yyyy or mm/dd/yyyy)
+    if (typeof v === "string" && /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(v)) {
+      const d = new Date(v);
+      if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    }
+    // Not a recognizable date — return null instead of raw string
+    return null;
+  };
+
+  // Check if a row is a sub-header (contains header text repeated in data area)
+  const isSubHeader = (row: (string | number)[], headerRow: string[]): boolean => {
+    const headerTexts = new Set(headerRow.filter(h => typeof h === "string" && h.length > 2).map(h => String(h).toLowerCase().trim()));
+    const rowTexts = row.filter(c => typeof c === "string" && String(c).length > 2).map(c => String(c).toLowerCase().trim());
+    const overlap = rowTexts.filter(t => headerTexts.has(t)).length;
+    return overlap >= 3; // If 3+ cells match header text, it's a sub-header
   };
 
   const colIndex = (header: string[], keys: string[]): number => {
@@ -88,18 +101,24 @@ async function ingestExcel(supabase: ReturnType<typeof createClient>, fileId: st
 
       if (allRows.length < 2) continue;
 
-      // Find header row (first row with 3+ non-empty cells)
+      // Find header row: look for a row with many text cells (not a title/summary row)
+      // A real header has 5+ text labels and >50% of non-empty cells are text
       let headerIdx = -1;
       let header: string[] = [];
-      for (let i = 0; i < Math.min(allRows.length, 10); i++) {
-        const nonEmpty = allRows[i].filter((c) => c !== "").length;
-        if (nonEmpty >= 3) {
-          const hasText = allRows[i].some((c) => typeof c === "string" && c.length > 1);
-          if (hasText) { headerIdx = i; header = allRows[i].map(String); break; }
+      for (let i = 0; i < Math.min(allRows.length, 20); i++) {
+        const cells = allRows[i];
+        const nonEmpty = cells.filter((c: string | number) => c !== "").length;
+        const textCells = cells.filter((c: string | number) => typeof c === "string" && String(c).length > 1);
+        if (textCells.length >= 5 && nonEmpty >= 5 && textCells.length / nonEmpty > 0.5) {
+          headerIdx = i;
+          header = cells.map(String);
+          break;
         }
       }
       if (headerIdx < 0 || header.length < 3) continue;
-      const dataRows = allRows.slice(headerIdx + 1).filter((r) => r.some((c) => c !== ""));
+      const dataRows = allRows.slice(headerIdx + 1)
+        .filter((r) => r.some((c) => c !== ""))
+        .filter((r) => !isSubHeader(r, header));
 
       // Detect CxP format
       const cxpScore = ["Empresa", "Proveedor", "Monto", "Vencimiento", "Prioridad"]
@@ -136,8 +155,24 @@ async function ingestExcel(supabase: ReturnType<typeof createClient>, fileId: st
         }).filter((x) => x.proveedor || x.monto_usd);
 
         if (items.length > 0) {
-          const { error: insErr } = await supabase.schema("silver_finance").from("cxp_items").insert(items);
-          if (!insErr) { totalRows += items.length; sheetsProcessed.push(`${sheetName}(CxP:${items.length})`); }
+          let batchInserted = 0;
+          let lastError: string | null = null;
+          for (let b = 0; b < items.length; b += 50) {
+            const batch = items.slice(b, b + 50);
+            const { error: insErr } = await supabase.schema("silver_finance").from("cxp_items").insert(batch);
+            if (insErr) {
+              console.error("CxP insert error:", insErr.message, "batch", b);
+              lastError = insErr.message;
+            } else {
+              batchInserted += batch.length;
+            }
+          }
+          if (batchInserted > 0) {
+            totalRows += batchInserted;
+            sheetsProcessed.push(`${sheetName}(CxP:${batchInserted}${lastError ? ",partial" : ""})`);
+          } else if (lastError) {
+            sheetsProcessed.push(`${sheetName}(CxP:ERROR:${lastError.slice(0, 100)})`);
+          }
         }
       } else if (flujoScore >= 3) {
         const items = dataRows.map((row) => {
@@ -164,8 +199,25 @@ async function ingestExcel(supabase: ReturnType<typeof createClient>, fileId: st
         }).filter((x) => x.operacion || x.cuota || x.principal);
 
         if (items.length > 0) {
-          const { error: insErr } = await supabase.schema("silver_finance").from("flujo_semanal").insert(items);
-          if (!insErr) { totalRows += items.length; sheetsProcessed.push(`${sheetName}(Flujo:${items.length})`); }
+          // Insert in batches of 50 to avoid payload limits
+          let batchInserted = 0;
+          let lastError: string | null = null;
+          for (let b = 0; b < items.length; b += 50) {
+            const batch = items.slice(b, b + 50);
+            const { error: insErr } = await supabase.schema("silver_finance").from("flujo_semanal").insert(batch);
+            if (insErr) {
+              console.error("Flujo insert error:", insErr.message, "batch", b);
+              lastError = insErr.message;
+            } else {
+              batchInserted += batch.length;
+            }
+          }
+          if (batchInserted > 0) {
+            totalRows += batchInserted;
+            sheetsProcessed.push(`${sheetName}(Flujo:${batchInserted}${lastError ? ",partial" : ""})`);
+          } else if (lastError) {
+            sheetsProcessed.push(`${sheetName}(Flujo:ERROR:${lastError.slice(0, 100)})`);
+          }
         }
       }
       // If neither CxP nor Flujo, skip — we don't ingest unknown formats
@@ -201,8 +253,8 @@ async function recalcProjection(supabase: ReturnType<typeof createClient>, _para
   const { data: cxp } = await supabase.schema("silver_finance").from("cxp_items").select("monto_usd, vencimiento_fecha, empresa");
   const { data: flujo } = await supabase.schema("silver_finance").from("flujo_semanal").select("cuota, vencimiento, compania");
 
-  const outflows = (cxp || []).reduce((s, r) => s + (Number(r.monto_usd) || 0), 0);
-  const inflows = (flujo || []).reduce((s, r) => s + (Number(r.cuota) || 0), 0);
+  const outflows = (cxp || []).reduce((s: number, r: { monto_usd: number }) => s + (Number(r.monto_usd) || 0), 0);
+  const inflows = (flujo || []).reduce((s: number, r: { cuota: number }) => s + (Number(r.cuota) || 0), 0);
 
   const months: { month: string; inflows: number; outflows: number; balance: number }[] = [];
   const now = new Date();
