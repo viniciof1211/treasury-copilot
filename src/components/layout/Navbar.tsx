@@ -1,7 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, Database, Briefcase, Settings, LogOut } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Database, Briefcase, Settings } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
-import { Button } from '../ui/Button';
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
@@ -13,15 +12,7 @@ const navigation = [
 
 export function Navbar() {
   const location = useLocation();
-  const { user, signOut } = useAuth();
-
-  const handleSignOut = async () => {
-    try {
-      await signOut();
-    } catch (error) {
-      console.error('Error signing out:', error);
-    }
-  };
+  const { user } = useAuth();
 
   return (
     <nav className="bg-white border-b border-gray-200">
@@ -61,18 +52,10 @@ export function Navbar() {
             </div>
           </div>
           <div className="flex items-center gap-4">
-            {user && (
-              <>
-                <div className="text-right">
-                  <p className="text-sm font-medium text-gray-900">{user.full_name}</p>
-                  <p className="text-xs text-gray-500 capitalize">{user.role.replace('_', ' ')}</p>
-                </div>
-                <Button variant="ghost" size="sm" onClick={handleSignOut}>
-                  <LogOut className="w-4 h-4 mr-2" />
-                  Sign Out
-                </Button>
-              </>
-            )}
+            <div className="text-right">
+              <p className="text-sm font-medium text-gray-900">{user.full_name}</p>
+              <p className="text-xs text-gray-500 capitalize">{user.role.replace('_', ' ')}</p>
+            </div>
           </div>
         </div>
       </div>
