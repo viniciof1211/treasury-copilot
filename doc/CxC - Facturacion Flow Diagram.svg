@@ -1,0 +1,646 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 5000 2200" style="background-color: white; font-family: Arial, sans-serif;">
+  <!-- Título Principal -->
+  <text x="2500" y="40" font-size="28" font-weight="bold" text-anchor="middle" fill="#1a1a1a">Proceso AS-IS: Cuentas por Cobrar + Facturación - ARA Group</text>
+  
+  <!-- Definiciones de estilos y marcadores -->
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#333" />
+    </marker>
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="2"/>
+      <feOffset dx="2" dy="2" result="offsetblur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.2"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Swimlanes -->
+  <!-- Cliente -->
+  <rect x="50" y="80" width="4900" height="140" fill="#f8f9fa" stroke="#dee2e6" stroke-width="2"/>
+  <text x="70" y="110" font-size="16" font-weight="bold" fill="#212529">Cliente</text>
+  
+  <!-- Área Comercial / Vendedor -->
+  <rect x="50" y="220" width="4900" height="140" fill="#e3f2fd" stroke="#90caf9" stroke-width="2"/>
+  <text x="70" y="250" font-size="16" font-weight="bold" fill="#1565c0">Área Comercial / Vendedor</text>
+  
+  <!-- Gestor de Cobro -->
+  <rect x="50" y="360" width="4900" height="180" fill="#fff3e0" stroke="#ffb74d" stroke-width="2"/>
+  <text x="70" y="390" font-size="16" font-weight="bold" fill="#e65100">Gestor de Cobro</text>
+  
+  <!-- Facturación / CxC -->
+  <rect x="50" y="540" width="4900" height="180" fill="#f3e5f5" stroke="#ba68c8" stroke-width="2"/>
+  <text x="70" y="570" font-size="16" font-weight="bold" fill="#6a1b9a">Facturación / CxC</text>
+  
+  <!-- Tesorería -->
+  <rect x="50" y="720" width="4900" height="160" fill="#e8f5e9" stroke="#66bb6a" stroke-width="2"/>
+  <text x="70" y="750" font-size="16" font-weight="bold" fill="#2e7d32">Tesorería</text>
+  
+  <!-- Sistema PCGraf -->
+  <rect x="50" y="880" width="4900" height="140" fill="#fce4ec" stroke="#f06292" stroke-width="2"/>
+  <text x="70" y="910" font-size="16" font-weight="bold" fill="#c2185b">Sistema PCGraf</text>
+  
+  <!-- Sistema Facturación Electrónica (Almamater) -->
+  <rect x="50" y="1020" width="4900" height="140" fill="#ede7f6" stroke="#9575cd" stroke-width="2"/>
+  <text x="70" y="1050" font-size="16" font-weight="bold" fill="#512da8">Sistema Almamater</text>
+  
+  <!-- Hacienda -->
+  <rect x="50" y="1160" width="4900" height="140" fill="#fff9c4" stroke="#ffd54f" stroke-width="2"/>
+  <text x="70" y="1190" font-size="16" font-weight="bold" fill="#f57f17">Hacienda</text>
+  
+  <!-- Bancos -->
+  <rect x="50" y="1300" width="4900" height="140" fill="#e0f2f1" stroke="#4db6ac" stroke-width="2"/>
+  <text x="70" y="1330" font-size="16" font-weight="bold" fill="#00695c">Bancos</text>
+  
+  <!-- Gerencia -->
+  <rect x="50" y="1440" width="4900" height="120" fill="#ffebee" stroke="#ef5350" stroke-width="2"/>
+  <text x="70" y="1470" font-size="16" font-weight="bold" fill="#c62828">Gerencia</text>
+  
+  <!-- Legal -->
+  <rect x="50" y="1560" width="4900" height="120" fill="#eceff1" stroke="#78909c" stroke-width="2"/>
+  <text x="70" y="1590" font-size="16" font-weight="bold" fill="#37474f">Legal</text>
+  
+  <!-- PROCESO A: FACTURACIÓN -->
+  
+  <!-- Inicio -->
+  <circle cx="200" cy="150" r="20" fill="white" stroke="#28a745" stroke-width="3"/>
+  <text x="200" y="200" font-size="13" text-anchor="middle" fill="#212529">Inicio: Solicitud</text>
+  <text x="200" y="215" font-size="13" text-anchor="middle" fill="#212529">de facturación</text>
+  
+  <!-- Flecha a F-01 -->
+  <line x1="220" y1="150" x2="280" y2="150" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- F-01: PCGraf -->
+  <rect x="290" y="910" width="180" height="80" rx="10" fill="white" stroke="#c2185b" stroke-width="2" filter="url(#shadow)"/>
+  <text x="380" y="935" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">F-01</text>
+  <text x="380" y="952" font-size="12" text-anchor="middle" fill="#495057">Ingresar/confirmar</text>
+  <text x="380" y="967" font-size="12" text-anchor="middle" fill="#495057">datos cliente para</text>
+  <text x="380" y="982" font-size="12" text-anchor="middle" fill="#495057">factura electrónica</text>
+  
+  <!-- Conexión desde inicio hasta F-01 -->
+  <line x1="220" y1="150" x2="250" y2="150" stroke="#333" stroke-width="2"/>
+  <line x1="250" y1="150" x2="250" y2="950" stroke="#333" stroke-width="2"/>
+  <line x1="250" y1="950" x2="290" y2="950" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- F-02 -->
+  <rect x="520" y="910" width="180" height="80" rx="10" fill="white" stroke="#c2185b" stroke-width="2" filter="url(#shadow)"/>
+  <text x="610" y="935" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">F-02</text>
+  <text x="610" y="952" font-size="12" text-anchor="middle" fill="#495057">Cargar detalle:</text>
+  <text x="610" y="967" font-size="12" text-anchor="middle" fill="#495057">códigos, cantidades,</text>
+  <text x="610" y="982" font-size="12" text-anchor="middle" fill="#495057">precio, desc., impuesto</text>
+  
+  <line x1="470" y1="950" x2="520" y2="950" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Gateway F-G01 -->
+  <path d="M 760 920 L 800 950 L 760 980 L 720 950 Z" fill="#fff3cd" stroke="#856404" stroke-width="2" filter="url(#shadow)"/>
+  <text x="760" y="935" font-size="12" font-weight="bold" text-anchor="middle" fill="#212529">F-G01</text>
+  <text x="760" y="950" font-size="11" text-anchor="middle" fill="#212529">¿Impuesto</text>
+  <text x="760" y="963" font-size="11" text-anchor="middle" fill="#212529">aplica?</text>
+  
+  <line x1="700" y1="950" x2="720" y2="950" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Ramas de gateway -->
+  <line x1="800" y1="950" x2="850" y2="950" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="825" y="940" font-size="11" fill="#495057">Sí/No</text>
+  
+  <!-- F-03 Validar exoneración con Hacienda -->
+  <rect x="860" y="1170" width="160" height="70" rx="10" fill="white" stroke="#f57f17" stroke-width="2" filter="url(#shadow)"/>
+  <text x="940" y="1195" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">F-03</text>
+  <text x="940" y="1212" font-size="12" text-anchor="middle" fill="#495057">Validar exoneración</text>
+  <text x="940" y="1227" font-size="12" text-anchor="middle" fill="#495057">con Hacienda</text>
+  
+  <!-- Conexión de gateway a F-03 -->
+  <line x1="850" y1="950" x2="850" y2="1205" stroke="#333" stroke-width="2"/>
+  <line x1="850" y1="1205" x2="860" y2="1205" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- F-04 Hacienda confirma -->
+  <rect x="1070" y="1170" width="160" height="70" rx="10" fill="white" stroke="#f57f17" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1150" y="1195" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">F-04</text>
+  <text x="1150" y="1212" font-size="12" text-anchor="middle" fill="#495057">Hacienda confirma</text>
+  <text x="1150" y="1227" font-size="12" text-anchor="middle" fill="#495057">vigencia + aceptación</text>
+  
+  <line x1="1020" y1="1205" x2="1070" y2="1205" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- F-05 PCGraf valida inventario -->
+  <rect x="1280" y="910" width="180" height="80" rx="10" fill="white" stroke="#c2185b" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1370" y="935" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">F-05</text>
+  <text x="1370" y="952" font-size="12" text-anchor="middle" fill="#495057">PCGraf valida</text>
+  <text x="1370" y="967" font-size="12" text-anchor="middle" fill="#495057">inventario: rebaja,</text>
+  <text x="1370" y="982" font-size="12" text-anchor="middle" fill="#495057">no saldos negativos</text>
+  
+  <!-- Conexión desde F-04 a F-05 -->
+  <line x1="1230" y1="1205" x2="1260" y2="1205" stroke="#333" stroke-width="2"/>
+  <line x1="1260" y1="1205" x2="1260" y2="950" stroke="#333" stroke-width="2"/>
+  <line x1="1260" y1="950" x2="1280" y2="950" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- F-06 Validar CABYS -->
+  <rect x="1510" y="1170" width="160" height="70" rx="10" fill="white" stroke="#f57f17" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1590" y="1195" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">F-06</text>
+  <text x="1590" y="1212" font-size="12" text-anchor="middle" fill="#495057">Validar CABYS</text>
+  <text x="1590" y="1227" font-size="12" text-anchor="middle" fill="#495057">(Hacienda)</text>
+  
+  <!-- Conexión F-05 a F-06 -->
+  <line x1="1460" y1="950" x2="1490" y2="950" stroke="#333" stroke-width="2"/>
+  <line x1="1490" y1="950" x2="1490" y2="1205" stroke="#333" stroke-width="2"/>
+  <line x1="1490" y1="1205" x2="1510" y2="1205" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Gateway F-G02: Fecha distinta? -->
+  <path d="M 1750 1175 L 1790 1205 L 1750 1235 L 1710 1205 Z" fill="#fff3cd" stroke="#856404" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1750" y="1195" font-size="11" font-weight="bold" text-anchor="middle" fill="#212529">F-G02</text>
+  <text x="1750" y="1208" font-size="10" text-anchor="middle" fill="#212529">¿Fecha≠hoy?</text>
+  
+  <line x1="1670" y1="1205" x2="1710" y2="1205" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Rama NO (continuar) -->
+  <line x1="1790" y1="1205" x2="1850" y2="1205" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="1820" y="1195" font-size="11" fill="#495057">NO</text>
+  
+  <!-- Rama SÍ (contingencia) -->
+  <line x1="1750" y1="1235" x2="1750" y2="1280" stroke="#333" stroke-width="2"/>
+  <text x="1760" y="1260" font-size="11" fill="#495057">SÍ</text>
+  
+  <!-- F-07 Contingencia -->
+  <rect x="1670" y="1280" width="160" height="60" rx="10" fill="#ffe6e6" stroke="#dc3545" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1750" y="1302" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">F-07</text>
+  <text x="1750" y="1319" font-size="12" text-anchor="middle" fill="#495057">Ejecutar</text>
+  <text x="1750" y="1334" font-size="12" text-anchor="middle" fill="#495057">contingencia</text>
+  
+  <!-- Retorno de contingencia -->
+  <line x1="1830" y1="1310" x2="1880" y2="1310" stroke="#333" stroke-width="2"/>
+  <line x1="1880" y1="1310" x2="1880" y2="1205" stroke="#333" stroke-width="2"/>
+  <line x1="1880" y1="1205" x2="1850" y2="1205" stroke="#333" stroke-width="2"/>
+  
+  <!-- F-08 Montar oferta proforma -->
+  <rect x="1900" y="910" width="180" height="80" rx="10" fill="white" stroke="#c2185b" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1990" y="935" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">F-08</text>
+  <text x="1990" y="952" font-size="12" text-anchor="middle" fill="#495057">Montar oferta</text>
+  <text x="1990" y="967" font-size="12" text-anchor="middle" fill="#495057">proforma en PCGraf</text>
+  <text x="1990" y="982" font-size="12" text-anchor="middle" fill="#495057">y validar info</text>
+  
+  <!-- Conexión desde gateway a F-08 -->
+  <line x1="1850" y1="1205" x2="1850" y2="950" stroke="#333" stroke-width="2"/>
+  <line x1="1850" y1="950" x2="1900" y2="950" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Documento Proforma -->
+  <rect x="1950" y="820" width="80" height="60" fill="white" stroke="#6c757d" stroke-width="2"/>
+  <line x1="1950" y1="820" x2="2010" y2="820" stroke="#6c757d" stroke-width="2"/>
+  <line x1="2010" y1="820" x2="2030" y2="840" stroke="#6c757d" stroke-width="2"/>
+  <line x1="2030" y1="840" x2="2030" y2="880" stroke="#6c757d" stroke-width="2"/>
+  <text x="1990" y="860" font-size="11" text-anchor="middle" fill="#495057">Proforma</text>
+  <line x1="1990" y1="880" x2="1990" y2="910" stroke="#6c757d" stroke-width="1" stroke-dasharray="3,3"/>
+  
+  <!-- F-09 Generar consecutivo Almamater -->
+  <rect x="2130" y="1030" width="180" height="80" rx="10" fill="white" stroke="#512da8" stroke-width="2" filter="url(#shadow)"/>
+  <text x="2220" y="1055" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">F-09</text>
+  <text x="2220" y="1072" font-size="12" text-anchor="middle" fill="#495057">Generar consecutivo</text>
+  <text x="2220" y="1087" font-size="12" text-anchor="middle" fill="#495057">de factura electrónica</text>
+  <text x="2220" y="1102" font-size="12" text-anchor="middle" fill="#495057">en Almamater</text>
+  
+  <!-- Conexión F-08 a F-09 -->
+  <line x1="2080" y1="950" x2="2110" y2="950" stroke="#333" stroke-width="2"/>
+  <line x1="2110" y1="950" x2="2110" y2="1070" stroke="#333" stroke-width="2"/>
+  <line x1="2110" y1="1070" x2="2130" y2="1070" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- F-10 Emitir factura electrónica -->
+  <rect x="2360" y="1030" width="180" height="80" rx="10" fill="white" stroke="#512da8" stroke-width="2" filter="url(#shadow)"/>
+  <text x="2450" y="1055" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">F-10</text>
+  <text x="2450" y="1072" font-size="12" text-anchor="middle" fill="#495057">Emitir factura</text>
+  <text x="2450" y="1087" font-size="12" text-anchor="middle" fill="#495057">electrónica</text>
+  
+  <line x1="2310" y1="1070" x2="2360" y2="1070" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Documento Factura Electrónica -->
+  <rect x="2410" y="940" width="80" height="60" fill="white" stroke="#6c757d" stroke-width="2"/>
+  <line x1="2410" y1="940" x2="2470" y2="940" stroke="#6c757d" stroke-width="2"/>
+  <line x1="2470" y1="940" x2="2490" y2="960" stroke="#6c757d" stroke-width="2"/>
+  <line x1="2490" y1="960" x2="2490" y2="1000" stroke="#6c757d" stroke-width="2"/>
+  <text x="2450" y="975" font-size="11" text-anchor="middle" fill="#495057">Factura</text>
+  <text x="2450" y="990" font-size="11" text-anchor="middle" fill="#495057">Electrónica</text>
+  <line x1="2450" y1="1000" x2="2450" y2="1030" stroke="#6c757d" stroke-width="1" stroke-dasharray="3,3"/>
+  
+  <!-- Fin parcial Facturación -->
+  <circle cx="2600" cy="1070" r="18" fill="white" stroke="#28a745" stroke-width="4"/>
+  <circle cx="2600" cy="1070" r="14" fill="white" stroke="#28a745" stroke-width="2"/>
+  <text x="2600" y="1130" font-size="13" text-anchor="middle" fill="#212529">Fin parcial:</text>
+  <text x="2600" y="1145" font-size="13" text-anchor="middle" fill="#212529">Factura emitida</text>
+  
+  <line x1="2540" y1="1070" x2="2582" y2="1070" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- PROCESO B: COBRO -->
+  
+  <!-- C-01 Asignar gestor -->
+  <rect x="2700" y="370" width="180" height="80" rx="10" fill="white" stroke="#e65100" stroke-width="2" filter="url(#shadow)"/>
+  <text x="2790" y="395" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">C-01</text>
+  <text x="2790" y="412" font-size="12" text-anchor="middle" fill="#495057">Asignar gestor por</text>
+  <text x="2790" y="427" font-size="12" text-anchor="middle" fill="#495057">área comercial según</text>
+  <text x="2790" y="442" font-size="12" text-anchor="middle" fill="#495057">factura y crédito</text>
+  
+  <!-- Conexión desde fin facturación a C-01 -->
+  <line x1="2618" y1="1070" x2="2680" y2="1070" stroke="#333" stroke-width="2"/>
+  <line x1="2680" y1="1070" x2="2680" y2="410" stroke="#333" stroke-width="2"/>
+  <line x1="2680" y1="410" x2="2700" y2="410" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- C-02 Determinar vencimiento -->
+  <rect x="2930" y="370" width="180" height="80" rx="10" fill="white" stroke="#e65100" stroke-width="2" filter="url(#shadow)"/>
+  <text x="3020" y="395" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">C-02</text>
+  <text x="3020" y="412" font-size="12" text-anchor="middle" fill="#495057">Determinar</text>
+  <text x="3020" y="427" font-size="12" text-anchor="middle" fill="#495057">vencimiento según</text>
+  <text x="3020" y="442" font-size="12" text-anchor="middle" fill="#495057">día de crédito</text>
+  
+  <line x1="2880" y1="410" x2="2930" y2="410" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- C-03 Actualización semanal -->
+  <rect x="3160" y="370" width="180" height="80" rx="10" fill="white" stroke="#e65100" stroke-width="2" filter="url(#shadow)"/>
+  <text x="3250" y="395" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">C-03</text>
+  <text x="3250" y="412" font-size="12" text-anchor="middle" fill="#495057">Actualización semanal</text>
+  <text x="3250" y="427" font-size="12" text-anchor="middle" fill="#495057">del registro de</text>
+  <text x="3250" y="442" font-size="12" text-anchor="middle" fill="#495057">cartera (aging)</text>
+  
+  <line x1="3110" y1="410" x2="3160" y2="410" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Gateway C-G01: Estado de factura -->
+  <path d="M 3420 380 L 3470 410 L 3420 440 L 3370 410 Z" fill="#fff3cd" stroke="#856404" stroke-width="2" filter="url(#shadow)"/>
+  <text x="3420" y="400" font-size="11" font-weight="bold" text-anchor="middle" fill="#212529">C-G01</text>
+  <text x="3420" y="413" font-size="10" text-anchor="middle" fill="#212529">Estado</text>
+  <text x="3420" y="425" font-size="10" text-anchor="middle" fill="#212529">factura</text>
+  
+  <line x1="3340" y1="410" x2="3370" y2="410" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Rama Normal -->
+  <line x1="3470" y1="410" x2="3530" y2="410" stroke="#333" stroke-width="2"/>
+  <text x="3500" y="400" font-size="11" fill="#495057">Normal</text>
+  
+  <!-- C-04 Seguimiento preventivo -->
+  <rect x="3540" y="370" width="160" height="70" rx="10" fill="white" stroke="#e65100" stroke-width="2" filter="url(#shadow)"/>
+  <text x="3620" y="395" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">C-04</text>
+  <text x="3620" y="412" font-size="12" text-anchor="middle" fill="#495057">Seguimiento</text>
+  <text x="3620" y="427" font-size="12" text-anchor="middle" fill="#495057">preventivo</text>
+  
+  <line x1="3530" y1="410" x2="3540" y2="410" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Rama Morosa -->
+  <line x1="3420" y1="440" x2="3420" y2="480" stroke="#333" stroke-width="2"/>
+  <text x="3430" y="465" font-size="11" fill="#495057">Morosa</text>
+  
+  <!-- C-05 Gestión intensiva -->
+  <rect x="3340" y="480" width="160" height="70" rx="10" fill="white" stroke="#e65100" stroke-width="2" filter="url(#shadow)"/>
+  <text x="3420" y="505" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">C-05</text>
+  <text x="3420" y="522" font-size="12" text-anchor="middle" fill="#495057">Gestión intensiva</text>
+  <text x="3420" y="537" font-size="12" text-anchor="middle" fill="#495057">morosidad</text>
+  
+  <line x1="3420" y1="480" x2="3420" y2="480" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Rama Adelanto -->
+  <line x1="3420" y1="380" x2="3420" y2="330" stroke="#333" stroke-width="2"/>
+  <text x="3430" y="350" font-size="11" fill="#495057">Adelanto</text>
+  
+  <!-- C-06 Cobrar anticipo -->
+  <rect x="3340" y="260" width="160" height="70" rx="10" fill="white" stroke="#e65100" stroke-width="2" filter="url(#shadow)"/>
+  <text x="3420" y="285" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">C-06</text>
+  <text x="3420" y="302" font-size="12" text-anchor="middle" fill="#495057">Cobrar anticipo</text>
+  <text x="3420" y="317" font-size="12" text-anchor="middle" fill="#495057">según contrato</text>
+  
+  <line x1="3420" y1="330" x2="3420" y2="330" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/><!-- Gateway C-G02: Factura por anticipo? -->
+  <path d="M 3580 265 L 3620 295 L 3580 325 L 3540 295 Z" fill="#fff3cd" stroke="#856404" stroke-width="2" filter="url(#shadow)"/>
+  <text x="3580" y="288" font-size="11" font-weight="bold" text-anchor="middle" fill="#212529">C-G02</text>
+  <text x="3580" y="300" font-size="10" text-anchor="middle" fill="#212529">¿Factura</text>
+  <text x="3580" y="311" font-size="10" text-anchor="middle" fill="#212529">anticipo?</text>
+  
+  <line x1="3500" y1="295" x2="3540" y2="295" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- C-07 Solicitar factura -->
+  <line x1="3620" y1="295" x2="3680" y2="295" stroke="#333" stroke-width="2"/>
+  <text x="3650" y="285" font-size="11" fill="#495057">SÍ</text>
+  
+  <rect x="3690" y="260" width="160" height="70" rx="10" fill="white" stroke="#e65100" stroke-width="2" filter="url(#shadow)"/>
+  <text x="3770" y="285" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">C-07</text>
+  <text x="3770" y="302" font-size="12" text-anchor="middle" fill="#495057">Solicitar/emitir</text>
+  <text x="3770" y="317" font-size="12" text-anchor="middle" fill="#495057">factura anticipo</text>
+  
+  <line x1="3680" y1="295" x2="3690" y2="295" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- C-08 Cobro sin factura -->
+  <line x1="3580" y1="325" x2="3580" y2="365" stroke="#333" stroke-width="2"/>
+  <text x="3590" y="350" font-size="11" fill="#495057">NO</text>
+  
+  <rect x="3500" y="365" width="160" height="70" rx="10" fill="white" stroke="#e65100" stroke-width="2" filter="url(#shadow)"/>
+  <text x="3580" y="390" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">C-08</text>
+  <text x="3580" y="407" font-size="12" text-anchor="middle" fill="#495057">Cobro sin factura;</text>
+  <text x="3580" y="422" font-size="12" text-anchor="middle" fill="#495057">regulariza al final</text>
+  
+  <line x1="3580" y1="365" x2="3580" y2="365" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- C-09 Módulos complementarios -->
+  <rect x="3900" y="370" width="180" height="80" rx="10" fill="white" stroke="#e65100" stroke-width="2" filter="url(#shadow)"/>
+  <text x="3990" y="395" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">C-09</text>
+  <text x="3990" y="412" font-size="12" text-anchor="middle" fill="#495057">Módulos: saldo +</text>
+  <text x="3990" y="427" font-size="12" text-anchor="middle" fill="#495057">estado de cuenta</text>
+  <text x="3990" y="442" font-size="12" text-anchor="middle" fill="#495057">avance/anticipos</text>
+  
+  <!-- Convergencia de rutas a C-09 -->
+  <line x1="3700" y1="410" x2="3870" y2="410" stroke="#333" stroke-width="2"/>
+  <line x1="3870" y1="410" x2="3870" y2="410" stroke="#333" stroke-width="2"/>
+  <line x1="3500" y1="515" x2="3870" y2="515" stroke="#333" stroke-width="2"/>
+  <line x1="3660" y1="400" x2="3870" y2="400" stroke="#333" stroke-width="2"/>
+  <line x1="3850" y1="295" x2="3870" y2="295" stroke="#333" stroke-width="2"/>
+  <line x1="3870" y1="295" x2="3870" y2="520" stroke="#333" stroke-width="2"/>
+  <line x1="3870" y1="410" x2="3900" y2="410" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- C-10 Separar cartera -->
+  <rect x="4130" y="370" width="180" height="80" rx="10" fill="white" stroke="#e65100" stroke-width="2" filter="url(#shadow)"/>
+  <text x="4220" y="395" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">C-10</text>
+  <text x="4220" y="412" font-size="12" text-anchor="middle" fill="#495057">Separar cartera</text>
+  <text x="4220" y="427" font-size="12" text-anchor="middle" fill="#495057">según salud de</text>
+  <text x="4220" y="442" font-size="12" text-anchor="middle" fill="#495057">factura</text>
+  
+  <line x1="4080" y1="410" x2="4130" y2="410" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Gateway C-G03: Cliente no responde? -->
+  <path d="M 4380 380 L 4430 410 L 4380 440 L 4330 410 Z" fill="#fff3cd" stroke="#856404" stroke-width="2" filter="url(#shadow)"/>
+  <text x="4380" y="400" font-size="11" font-weight="bold" text-anchor="middle" fill="#212529">C-G03</text>
+  <text x="4380" y="413" font-size="10" text-anchor="middle" fill="#212529">¿Cliente no</text>
+  <text x="4380" y="425" font-size="10" text-anchor="middle" fill="#212529">responde?</text>
+  
+  <line x1="4310" y1="410" x2="4330" y2="410" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Rama NO (continuar seguimiento) -->
+  <line x1="4380" y1="380" x2="4380" y2="340" stroke="#333" stroke-width="2"/>
+  <line x1="4380" y1="340" x2="4100" y2="340" stroke="#333" stroke-width="2"/>
+  <line x1="4100" y1="340" x2="4100" y2="370" stroke="#333" stroke-width="2"/>
+  <text x="4300" y="360" font-size="11" fill="#495057">NO</text>
+  
+  <!-- Rama SÍ -->
+  <line x1="4430" y1="410" x2="4490" y2="410" stroke="#333" stroke-width="2"/>
+  <text x="4460" y="400" font-size="11" fill="#495057">SÍ</text>
+  
+  <!-- C-11 Escalar a Gerencia -->
+  <rect x="4500" y="1450" width="160" height="70" rx="10" fill="white" stroke="#c62828" stroke-width="2" filter="url(#shadow)"/>
+  <text x="4580" y="1475" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">C-11</text>
+  <text x="4580" y="1492" font-size="12" text-anchor="middle" fill="#495057">Escalar a</text>
+  <text x="4580" y="1507" font-size="12" text-anchor="middle" fill="#495057">Gerencia</text>
+  
+  <line x1="4490" y1="410" x2="4490" y2="1485" stroke="#333" stroke-width="2"/>
+  <line x1="4490" y1="1485" x2="4500" y2="1485" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Gateway C-G04: Sin respuesta tras gerencia? -->
+  <path d="M 4740 1455 L 4780 1485 L 4740 1515 L 4700 1485 Z" fill="#fff3cd" stroke="#856404" stroke-width="2" filter="url(#shadow)"/>
+  <text x="4740" y="1478" font-size="11" font-weight="bold" text-anchor="middle" fill="#212529">C-G04</text>
+  <text x="4740" y="1490" font-size="10" text-anchor="middle" fill="#212529">¿Sin resp.?</text>
+  
+  <line x1="4660" y1="1485" x2="4700" y2="1485" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Rama NO (volver a cobro) -->
+  <line x1="4740" y1="1455" x2="4740" y2="1420" stroke="#333" stroke-width="2"/>
+  <line x1="4740" y1="1420" x2="4460" y2="1420" stroke="#333" stroke-width="2"/>
+  <line x1="4460" y1="1420" x2="4460" y2="410" stroke="#333" stroke-width="2"/>
+  <text x="4650" y="1440" font-size="11" fill="#495057">NO</text>
+  
+  <!-- Rama SÍ -->
+  <line x1="4740" y1="1515" x2="4740" y2="1555" stroke="#333" stroke-width="2"/>
+  <text x="4750" y="1540" font-size="11" fill="#495057">SÍ</text>
+  
+  <!-- C-12 Involucrar Legal -->
+  <rect x="4660" y="1570" width="160" height="70" rx="10" fill="white" stroke="#37474f" stroke-width="2" filter="url(#shadow)"/>
+  <text x="4740" y="1595" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">C-12</text>
+  <text x="4740" y="1612" font-size="12" text-anchor="middle" fill="#495057">Involucrar</text>
+  <text x="4740" y="1627" font-size="12" text-anchor="middle" fill="#495057">Legal</text>
+  
+  <line x1="4740" y1="1555" x2="4740" y2="1570" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- PROCESO C: TESORERÍA Y APLICACIÓN -->
+  
+  <!-- T-01 Recibir estados bancarios -->
+  <rect x="300" y="1310" width="180" height="80" rx="10" fill="white" stroke="#00695c" stroke-width="2" filter="url(#shadow)"/>
+  <text x="390" y="1335" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">T-01</text>
+  <text x="390" y="1352" font-size="12" text-anchor="middle" fill="#495057">Recibir estados</text>
+  <text x="390" y="1367" font-size="12" text-anchor="middle" fill="#495057">bancarios por correo</text>
+  <text x="390" y="1382" font-size="12" text-anchor="middle" fill="#495057">diariamente</text>
+  
+  <!-- Documento Estados bancarios -->
+  <rect x="330" y="1400" width="80" height="60" fill="white" stroke="#6c757d" stroke-width="2"/>
+  <line x1="330" y1="1400" x2="390" y2="1400" stroke="#6c757d" stroke-width="2"/>
+  <line x1="390" y1="1400" x2="410" y2="1420" stroke="#6c757d" stroke-width="2"/>
+  <line x1="410" y1="1420" x2="410" y2="1460" stroke="#6c757d" stroke-width="2"/>
+  <text x="370" y="1433" font-size="11" text-anchor="middle" fill="#495057">Estados</text>
+  <text x="370" y="1448" font-size="11" text-anchor="middle" fill="#495057">Bancarios</text>
+  
+  <!-- T-02 Conciliar pagos -->
+  <rect x="530" y="730" width="180" height="80" rx="10" fill="white" stroke="#2e7d32" stroke-width="2" filter="url(#shadow)"/>
+  <text x="620" y="755" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">T-02</text>
+  <text x="620" y="772" font-size="12" text-anchor="middle" fill="#495057">Conciliar pagos</text>
+  <text x="620" y="787" font-size="12" text-anchor="middle" fill="#495057">vs facturas en</text>
+  <text x="620" y="802" font-size="12" text-anchor="middle" fill="#495057">PCGraf</text>
+  
+  <line x1="480" y1="1350" x2="510" y2="1350" stroke="#333" stroke-width="2"/>
+  <line x1="510" y1="1350" x2="510" y2="770" stroke="#333" stroke-width="2"/>
+  <line x1="510" y1="770" x2="530" y2="770" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- T-03 Registrar ingreso -->
+  <rect x="760" y="730" width="180" height="80" rx="10" fill="white" stroke="#2e7d32" stroke-width="2" filter="url(#shadow)"/>
+  <text x="850" y="755" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">T-03</text>
+  <text x="850" y="772" font-size="12" text-anchor="middle" fill="#495057">Registrar ingreso</text>
+  <text x="850" y="787" font-size="12" text-anchor="middle" fill="#495057">a bancos (debe</text>
+  <text x="850" y="802" font-size="12" text-anchor="middle" fill="#495057">existir ingreso)</text>
+  
+  <line x1="710" y1="770" x2="760" y2="770" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- T-04 Generar recibo -->
+  <rect x="990" y="730" width="180" height="80" rx="10" fill="white" stroke="#2e7d32" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1080" y="755" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">T-04</text>
+  <text x="1080" y="772" font-size="12" text-anchor="middle" fill="#495057">Generar recibo de</text>
+  <text x="1080" y="787" font-size="12" text-anchor="middle" fill="#495057">ingreso en PCGraf</text>
+  
+  <line x1="940" y1="770" x2="990" y2="770" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Documento Recibo de ingreso -->
+  <rect x="1030" y="640" width="80" height="60" fill="white" stroke="#6c757d" stroke-width="2"/>
+  <line x1="1030" y1="640" x2="1090" y2="640" stroke="#6c757d" stroke-width="2"/>
+  <line x1="1090" y1="640" x2="1110" y2="660" stroke="#6c757d" stroke-width="2"/>
+  <line x1="1110" y1="660" x2="1110" y2="700" stroke="#6c757d" stroke-width="2"/>
+  <text x="1070" y="675" font-size="11" text-anchor="middle" fill="#495057">Recibo de</text>
+  <text x="1070" y="690" font-size="11" text-anchor="middle" fill="#495057">Ingreso</text>
+  <line x1="1080" y1="700" x2="1080" y2="730" stroke="#6c757d" stroke-width="1" stroke-dasharray="3,3"/>
+  
+  <!-- T-05 Aplicar recibo a factura -->
+  <rect x="1220" y="730" width="180" height="80" rx="10" fill="white" stroke="#2e7d32" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1310" y="755" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">T-05</text>
+  <text x="1310" y="772" font-size="12" text-anchor="middle" fill="#495057">Aplicar recibo a</text>
+  <text x="1310" y="787" font-size="12" text-anchor="middle" fill="#495057">factura</text>
+  <text x="1310" y="802" font-size="12" text-anchor="middle" fill="#495057">correspondiente</text>
+  
+  <line x1="1170" y1="770" x2="1220" y2="770" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Gateway T-G01: Existe factura? -->
+  <path d="M 1470 740 L 1520 770 L 1470 800 L 1420 770 Z" fill="#fff3cd" stroke="#856404" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1470" y="760" font-size="11" font-weight="bold" text-anchor="middle" fill="#212529">T-G01</text>
+  <text x="1470" y="773" font-size="10" text-anchor="middle" fill="#212529">¿Existe</text>
+  <text x="1470" y="785" font-size="10" text-anchor="middle" fill="#212529">factura?</text>
+  
+  <line x1="1400" y1="770" x2="1420" y2="770" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Rama SÍ (cancelada) -->
+  <line x1="1520" y1="770" x2="1580" y2="770" stroke="#333" stroke-width="2"/>
+  <text x="1550" y="760" font-size="11" fill="#495057">SÍ</text>
+  
+  <rect x="1590" y="730" width="160" height="70" rx="10" fill="#d4edda" stroke="#28a745" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1670" y="755" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">Factura</text>
+  <text x="1670" y="772" font-size="12" text-anchor="middle" fill="#495057">cancelada</text>
+  <text x="1670" y="787" font-size="12" text-anchor="middle" fill="#495057">(si monto completo)</text>
+  
+  <line x1="1580" y1="770" x2="1590" y2="770" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Rama NO -->
+  <line x1="1470" y1="800" x2="1470" y2="840" stroke="#333" stroke-width="2"/>
+  <text x="1480" y="825" font-size="11" fill="#495057">NO</text>
+  
+  <!-- T-06 Generar nota de crédito -->
+  <rect x="1390" y="840" width="160" height="70" rx="10" fill="white" stroke="#2e7d32" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1470" y="865" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">T-06</text>
+  <text x="1470" y="882" font-size="12" text-anchor="middle" fill="#495057">Generar nota de</text>
+  <text x="1470" y="897" font-size="12" text-anchor="middle" fill="#495057">crédito por adelanto</text>
+  
+  <line x1="1470" y1="840" x2="1470" y2="840" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- T-07 Notas de crédito a Hacienda -->
+  <rect x="1600" y="1170" width="180" height="80" rx="10" fill="white" stroke="#f57f17" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1690" y="1195" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">T-07</text>
+  <text x="1690" y="1212" font-size="12" text-anchor="middle" fill="#495057">NC a Hacienda:</text>
+  <text x="1690" y="1227" font-size="12" text-anchor="middle" fill="#495057">retención, devolución,</text>
+  <text x="1690" y="1242" font-size="12" text-anchor="middle" fill="#495057">diferencial cambiario</text>
+  
+  <line x1="1550" y1="875" x2="1580" y2="875" stroke="#333" stroke-width="2"/>
+  <line x1="1580" y1="875" x2="1580" y2="1210" stroke="#333" stroke-width="2"/>
+  <line x1="1580" y1="1210" x2="1600" y2="1210" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Documento Nota de Crédito -->
+  <rect x="1640" y="1080" width="80" height="60" fill="white" stroke="#6c757d" stroke-width="2"/>
+  <line x1="1640" y1="1080" x2="1700" y2="1080" stroke="#6c757d" stroke-width="2"/>
+  <line x1="1700" y1="1080" x2="1720" y2="1100" stroke="#6c757d" stroke-width="2"/>
+  <line x1="1720" y1="1100" x2="1720" y2="1140" stroke="#6c757d" stroke-width="2"/>
+  <text x="1680" y="1115" font-size="11" text-anchor="middle" fill="#495057">Nota de</text>
+  <text x="1680" y="1130" font-size="11" text-anchor="middle" fill="#495057">Crédito</text>
+  <line x1="1690" y1="1140" x2="1690" y2="1170" stroke="#6c757d" stroke-width="1" stroke-dasharray="3,3"/>
+  
+  <!-- T-08 Notas internas -->
+  <rect x="1840" y="550" width="180" height="80" rx="10" fill="white" stroke="#6a1b9a" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1930" y="575" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">T-08</text>
+  <text x="1930" y="592" font-size="12" text-anchor="middle" fill="#495057">NC internas</text>
+  <text x="1930" y="607" font-size="12" text-anchor="middle" fill="#495057">(intercompany)</text>
+  <text x="1930" y="622" font-size="12" text-anchor="middle" fill="#495057">NO van a Hacienda</text>
+  
+  <line x1="1470" y1="840" x2="1470" y2="820" stroke="#333" stroke-width="2"/>
+  <line x1="1470" y1="820" x2="1820" y2="820" stroke="#333" stroke-width="2"/>
+  <line x1="1820" y1="820" x2="1820" y2="590" stroke="#333" stroke-width="2"/>
+  <line x1="1820" y1="590" x2="1840" y2="590" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Fin global -->
+  <circle cx="2100" cy="770" r="22" fill="white" stroke="#28a745" stroke-width="5"/>
+  <circle cx="2100" cy="770" r="17" fill="white" stroke="#28a745" stroke-width="3"/>
+  <text x="2100" y="835" font-size="14" font-weight="bold" text-anchor="middle" fill="#212529">Fin global:</text>
+  <text x="2100" y="852" font-size="13" text-anchor="middle" fill="#212529">Cartera actualizada +</text>
+  <text x="2100" y="867" font-size="13" text-anchor="middle" fill="#212529">contabilidad al día</text>
+  
+  <!-- Conexión desde factura cancelada al fin -->
+  <line x1="1750" y1="765" x2="2078" y2="770" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  
+  <!-- Conexión desde NC a fin -->
+  <line x1="1780" y1="1210" x2="1900" y2="1210" stroke="#333" stroke-width="2"/>
+  <line x1="1900" y1="1210" x2="1900" y2="770" stroke="#333" stroke-width="2"/>
+  <line x1="1900" y1="770" x2="2078" y2="770" stroke="#333" stroke-width="2"/>
+  
+  <!-- CUADROS LATERALES -->
+  
+  <!-- Notas / Restricciones -->
+  <rect x="100" y="1700" width="900" height="400" fill="#fff8e1" stroke="#ff6f00" stroke-width="3" rx="5"/>
+  <text x="550" y="1735" font-size="18" font-weight="bold" text-anchor="middle" fill="#e65100">Notas / Restricciones</text>
+  <line x1="120" y1="1750" x2="980" y2="1750" stroke="#ff6f00" stroke-width="1"/>
+  
+  <text x="120" y="1780" font-size="14" fill="#212529">• Se puede ir trabajando data de +90 días</text>
+  <text x="120" y="1810" font-size="14" fill="#212529">• La de 60 días debe ir en tiempo real y de último</text>
+  <text x="120" y="1840" font-size="14" fill="#212529">• Facturas especiales / incobrables requieren</text>
+  <text x="120" y="1865" font-size="14" fill="#212529">  tratamiento particular</text>
+  <text x="120" y="1895" font-size="14" fill="#212529">• Confirmar timeline de data limpia y cronograma</text>
+  <text x="120" y="1925" font-size="14" fill="#212529">• Identificar data a depurar para presentar a gerencia</text>
+  <text x="120" y="1950" font-size="14" fill="#212529">  (compromiso: 07/01/2025)</text>
+  <text x="120" y="1980" font-size="14" fill="#212529">• Cartera morosa: 1 día vencido hasta 1000 días</text>
+  <text x="120" y="2010" font-size="14" fill="#212529">• Adelantos de proyecto nuevo: no ligados a factura,</text>
+  <text x="120" y="2035" font-size="14" fill="#212529">  ligados a contrato</text>
+  <text x="120" y="2065" font-size="14" fill="#212529">• Estados bancarios recibidos diariamente por correo</text>
+  
+  <!-- Recomendaciones -->
+  <rect x="1050" y="1700" width="900" height="350" fill="#e8f5e9" stroke="#2e7d32" stroke-width="3" rx="5"/>
+  <text x="1500" y="1735" font-size="18" font-weight="bold" text-anchor="middle" fill="#1b5e20">Recomendaciones</text>
+  <line x1="1070" y1="1750" x2="1930" y2="1750" stroke="#2e7d32" stroke-width="1"/>
+  
+  <text x="1070" y="1780" font-size="14" fill="#212529">• Debe existir conexión de generación de factura con</text>
+  <text x="1070" y="1805" font-size="14" fill="#212529">  el ERP para automatizar el flujo</text>
+  <text x="1070" y="1835" font-size="14" fill="#212529">• Bajar requerimientos a nivel de Hacienda para crear</text>
+  <text x="1070" y="1860" font-size="14" fill="#212529">  factura electrónica (simplificar validaciones)</text>
+  <text x="1070" y="1890" font-size="14" fill="#212529">• Implementar alertas tempranas de vencimiento</text>
+  <text x="1070" y="1920" font-size="14" fill="#212529">• Automatizar conciliación bancaria (T-02)</text>
+  <text x="1070" y="1950" font-size="14" fill="#212529">• Estandarizar proceso de escalamiento a Gerencia</text>
+  <text x="1070" y="1980" font-size="14" fill="#212529">• Centralizar gestión de notas de crédito</text>
+  <text x="1070" y="2010" font-size="14" fill="#212529">• Integrar Almamater con PCGraf para evitar doble carga</text>
+  
+  <!-- Leyenda BPMN -->
+  <rect x="2050" y="1700" width="850" height="430" fill="#f8f9fa" stroke="#495057" stroke-width="3" rx="5"/>
+  <text x="2475" y="1735" font-size="18" font-weight="bold" text-anchor="middle" fill="#212529">Leyenda BPMN</text>
+  <line x1="2070" y1="1750" x2="2880" y2="1750" stroke="#495057" stroke-width="1"/>
+  
+  <!-- Evento inicio -->
+  <circle cx="2120" cy="1790" r="18" fill="white" stroke="#28a745" stroke-width="3"/>
+  <text x="2160" y="1795" font-size="14" fill="#212529">Evento de inicio</text>
+  
+  <!-- Actividad/Tarea -->
+  <rect x="2085" y="1820" width="70" height="40" rx="8" fill="white" stroke="#495057" stroke-width="2"/>
+  <text x="2120" y="1845" font-size="12" text-anchor="middle" fill="#212529">Tarea</text>
+  <text x="2180" y="1845" font-size="14" fill="#212529">Actividad / Tarea</text>
+  
+  <!-- Gateway/Decisión -->
+  <path d="M 2120 1880 L 2145 1900 L 2120 1920 L 2095 1900 Z" fill="#fff3cd" stroke="#856404" stroke-width="2"/>
+  <text x="2180" y="1905" font-size="14" fill="#212529">Gateway / Decisión</text>
+  
+  <!-- Evento fin -->
+  <circle cx="2120" cy="1960" r="18" fill="white" stroke="#28a745" stroke-width="4"/>
+  <circle cx="2120" cy="1960" r="14" fill="white" stroke="#28a745" stroke-width="2"/>
+  <text x="2160" y="1965" font-size="14" fill="#212529">Evento de fin</text>
+  
+  <!-- Documento -->
+  <rect x="2090" y="1990" width="60" height="45" fill="white" stroke="#6c757d" stroke-width="2"/>
+  <line x1="2090" y1="1990" x2="2135" y2="1990" stroke="#6c757d" stroke-width="2"/>
+  <line x1="2135" y1="1990" x2="2150" y2="2005" stroke="#6c757d" stroke-width="2"/>
+  <line x1="2150" y1="2005" x2="2150" y2="2035" stroke="#6c757d" stroke-width="2"/>
+  <text x="2180" y="2015" font-size="14" fill="#212529">Documento / Artefacto</text>
+  
+  <!-- Flujo -->
+  <line x1="2090" y1="2065" x2="2150" y2="2065" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="2180" y="2070" font-size="14" fill="#212529">Flujo secuencial</text>
+  
+  <!-- Flujo mensaje -->
+  <line x1="2090" y1="2095" x2="2150" y2="2095" stroke="#333" stroke-width="2" stroke-dasharray="5,5"/>
+  <text x="2180" y="2100" font-size="14" fill="#212529">Flujo de mensaje/dato</text>
+  
+  <!-- Info adicional -->
+  <text x="2070" y="2130" font-size="13" font-style="italic" fill="#6c757d">Las swimlanes representan actores/sistemas responsables</text>
+  
+  <!-- Documento Estado de cuenta proyecto -->
+  <rect x="3750" y="470" width="80" height="60" fill="white" stroke="#6c757d" stroke-width="2"/>
+  <line x1="3750" y1="470" x2="3810" y2="470" stroke="#6c757d" stroke-width="2"/>
+  <line x1="3810" y1="470" x2="3830" y2="490" stroke="#6c757d" stroke-width="2"/>
+  <line x1="3830" y1="490" x2="3830" y2="530" stroke="#6c757d" stroke-width="2"/>
+  <text x="3790" y="505" font-size="11" text-anchor="middle" fill="#495057">Estado de</text>
+  <text x="3790" y="520" font-size="11" text-anchor="middle" fill="#495057">cuenta proy.</text>
+  <line x1="3790" y1="470" x2="3790" y2="440" stroke="#6c757d" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="3790" y1="440" x2="3990" y2="440" stroke="#6c757d" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="3990" y1="440" x2="3990" y2="370" stroke="#6c757d" stroke-width="1" stroke-dasharray="3,3"/>
+  
+  <!-- Info metadata -->
+  <text x="50" y="2170" font-size="12" fill="#6c757d">Proceso AS-IS | CxC + Facturación | ARA Group | Versión 1.0 | Enero 2025</text>
+  <text x="4750" y="2170" font-size="12" text-anchor="end" fill="#6c757d">Diagrama BPMN Ejecutivo</text>
+  
+</svg>
