@@ -6,7 +6,6 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Textarea } from '../components/ui/Input';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
-import { useAuth } from '../contexts/AuthContext';
 import type { ChatMessage } from '../types';
 
 const exampleQuestions = [
@@ -22,7 +21,6 @@ export function Chat() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { user } = useAuth();
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
