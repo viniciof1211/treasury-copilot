@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { Dashboard } from './pages/Dashboard';
+import { CashflowDashboard } from './pages/CashflowDashboard';
+import { CreditDashboard } from './pages/CreditDashboard';
 import { Chat } from './pages/Chat';
 import { DataSources } from './pages/DataSources';
 import { Projects } from './pages/Projects';
@@ -18,6 +20,8 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/cashflow" element={<CashflowDashboard />} />
+          <Route path="/credito" element={<CreditDashboard />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/data" element={<DataSources />} />
           <Route path="/projects" element={<Projects />} />
