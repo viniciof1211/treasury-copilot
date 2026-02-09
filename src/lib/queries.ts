@@ -39,6 +39,29 @@ export interface IngestRun {
   rows_inserted: number; created_at: string;
 }
 
+export interface MRPItem {
+  codigo: string; descripcion: string; abc_class: string; tipo_stock: string;
+  comprador: string; tipo_item: string; proveedor: string;
+  lead_time_dias: number; origen: string; dificultad_logistica: number;
+  compra_minima: number; unidad_medida: string;
+  consumo_m1: number; consumo_m2: number; consumo_m3: number; consumo_m4: number;
+  consumo_m5: number; consumo_m6: number; consumo_m7: number; consumo_m8: number;
+  consumo_promedio: number; consumo_diario: number; desv_estandar: number;
+  inventario: number; reserva: number; inventario_disponible: number;
+  transito: number; inventario_total: number; dias_cobertura: number;
+  minimo_inventario: number; dias_stock: number; stock_seguridad: number;
+  punto_reorden: number; max_inventario: number;
+  costo_unitario: number; costo_inventario: number;
+  costo_inventario_transito: number; costo_total_inventario: number;
+  costo_stock_seguridad: number; costo_inv_min: number;
+  costo_inv_reorden: number; costo_inv_max: number;
+  alerta_desabasto: string | null; hacer_pedido: string | null;
+  cantidad_requerida: number; analisis_parametros: string | null;
+  familia: string; infaltable: string; descontinuado: string;
+  subclasificacion: string;
+  created_at: string; ingest_run_id: string;
+}
+
 export type TimePeriod = '1m' | '3m' | '6m' | '12m' | 'all';
 
 export function getDateCutoff(period: TimePeriod): string | null {

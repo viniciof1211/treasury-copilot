@@ -368,6 +368,83 @@ async function ingestParsedData(
       } else if (lastError) {
         sheetsProcessed.push(`${sheetName}(CxP:ERROR:${lastError.slice(0, 100)})`);
       }
+    } else if (format === "mrp") {
+      // ── MRP / Compras format ──────────────────────────────────────────────
+      const items = dataRows.map((row) => {
+        const get = (keys: string[]) => {
+          const i = colIndex(header, keys);
+          return i >= 0 ? row[i] : null;
+        };
+        const str = (keys: string[]) => { const v = get(keys); return v != null && v !== "" ? String(v) : null; };
+        const num = (keys: string[]) => { const v = Number(get(keys)); return isFinite(v) ? v : 0; };
+        return {
+          ingest_run_id: ingestRunId,
+          codigo: str(["Codigo", "Código", "SKU", "CodigoProducto"]),
+          descripcion: str(["Descripcion", "Descripción", "Descripcion Articulo"]),
+          abc_class: str(["ABC", "Clasificacion ABC"]),
+          tipo_stock: str(["Tipo de Stock", "Stock Type"]),
+          comprador: str(["Comprador", "Buyer"]),
+          tipo_item: str(["Tipo"]),
+          proveedor: str(["Proveedor", "Supplier"]),
+          lead_time_dias: num(["Lead Time", "Reabasto Dias"]),
+          origen: str(["Origen", "Origin"]),
+          dificultad_logistica: num(["Dificultad Logistica"]),
+          compra_minima: num(["Compra Minima", "Min Order"]),
+          unidad_medida: str(["U.M", "Unidad", "UOM"]),
+          consumo_m1: num(["Consumo mes 1"]),
+          consumo_m2: num(["Consumo mes 2"]),
+          consumo_m3: num(["Consumo mes 3"]),
+          consumo_m4: num(["Consumo mes 4"]),
+          consumo_m5: num(["Consumo mes 5"]),
+          consumo_m6: num(["Consumo mes 6"]),
+          consumo_m7: num(["Consumo mes 7"]),
+          consumo_m8: num(["Consumo mes 8"]),
+          consumo_promedio: num(["Consumo Promedio", "Consumo Promedio Mensual"]),
+          consumo_diario: num(["CM x Dia", "Consumo Diario"]),
+          desv_estandar: num(["Desv Estandar", "Desviacion"]),
+          inventario: num(["Inventario", "SaldoActual"]),
+          reserva: num(["Reserva", "Total Reservas"]),
+          inventario_disponible: num(["Inventario Disponible"]),
+          transito: num(["Transito", "TransitoProceso"]),
+          inventario_total: num(["Inventario Total"]),
+          dias_cobertura: num(["Dias de Cobertura"]),
+          minimo_inventario: num(["Minimo de Inventario", "Min Inventario"]),
+          dias_stock: num(["Dias de Stock"]),
+          stock_seguridad: num(["Stock de Seguridad", "Safety Stock"]),
+          punto_reorden: num(["P Reorden", "Reorder Point"]),
+          max_inventario: num(["Max Inventario"]),
+          costo_unitario: num(["Costo Unitario", "Costo Unitario Articulo", "ValorDolar"]),
+          costo_inventario: num(["Costo del Inventario", "Costo Inventario"]),
+          costo_inventario_transito: num(["Costo Inventario Transito"]),
+          costo_total_inventario: num(["Costo Total del Inventario", "Costo Total"]),
+          costo_stock_seguridad: num(["Costo Stock de Seguridad"]),
+          costo_inv_min: num(["Costo Inventario MIN"]),
+          costo_inv_reorden: num(["Costo Inventario P.Reorden"]),
+          costo_inv_max: num(["Costo Inventario MAX"]),
+          alerta_desabasto: str(["Alerta de Desabasto", "Alerta"]),
+          hacer_pedido: str(["Hacer Pedido"]),
+          cantidad_requerida: num(["Cantidad Requerida", "Cantidad Requerida Redondeada"]),
+          analisis_parametros: str(["Analisis Parametros"]),
+          familia: str(["FAMILIAS", "Familia"]),
+          infaltable: str(["Infaltable"]),
+          descontinuado: str(["Descontinuado"]),
+          subclasificacion: str(["Subclasificacion", "Subclas"]),
+        };
+      }).filter((x) => x.codigo || x.descripcion);
+
+      let batchInserted = 0;
+      let lastError: string | null = null;
+      for (let b = 0; b < items.length; b += 50) {
+        const batch = items.slice(b, b + 50);
+        const { error: insErr } = await supabase.schema("silver_finance").from("mrp_master").insert(batch);
+        if (insErr) { lastError = insErr.message; } else { batchInserted += batch.length; }
+      }
+      if (batchInserted > 0) {
+        totalRows += batchInserted;
+        sheetsProcessed.push(`${sheetName}(MRP:${batchInserted}${lastError ? ",partial" : ""})`);
+      } else if (lastError) {
+        sheetsProcessed.push(`${sheetName}(MRP:ERROR:${lastError.slice(0, 100)})`);
+      }
     } else if (format === "flujo") {
       const items = dataRows.map((row) => {
         const get = (keys: string[]) => {

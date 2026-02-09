@@ -4,6 +4,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import { Dashboard } from './pages/Dashboard';
 import { CashflowDashboard } from './pages/CashflowDashboard';
 import { CreditDashboard } from './pages/CreditDashboard';
+import { ComprasDashboard } from './pages/ComprasDashboard';
 import { Chat } from './pages/Chat';
 import { DataSources } from './pages/DataSources';
 import { Projects } from './pages/Projects';
@@ -22,6 +23,7 @@ function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/cashflow" element={<CashflowDashboard />} />
           <Route path="/credito" element={<CreditDashboard />} />
+          <Route path="/compras" element={<ComprasDashboard />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/data" element={<DataSources />} />
           <Route path="/projects" element={<Projects />} />

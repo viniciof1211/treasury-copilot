@@ -13,6 +13,77 @@ import type { IngestRun } from '../types';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
+// ── MRP column mapper — maps Excel headers to mrp_master DB columns ─────────
+function mapMRPRow(
+  row: (string | number | null)[],
+  header: string[],
+  ingestRunId: string,
+) {
+  const colIdx = (keys: string[]): number => {
+    for (const k of keys) {
+      const idx = header.findIndex((h) => String(h).toLowerCase().includes(k.toLowerCase()));
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
+  const str = (keys: string[]) => { const i = colIdx(keys); const v = i >= 0 ? row[i] : null; return v != null && v !== '' ? String(v) : null; };
+  const num = (keys: string[]) => { const i = colIdx(keys); const v = Number(i >= 0 ? row[i] : 0); return isFinite(v) ? v : 0; };
+
+  return {
+    ingest_run_id: ingestRunId,
+    codigo: str(['Codigo', 'Código', 'SKU', 'CodigoProducto']),
+    descripcion: str(['Descripcion', 'Descripción', 'Descripcion Articulo']),
+    abc_class: str(['ABC', 'Clasificacion ABC']),
+    tipo_stock: str(['Tipo de Stock', 'Stock Type']),
+    comprador: str(['Comprador', 'Buyer']),
+    tipo_item: str(['Tipo']),
+    proveedor: str(['Proveedor', 'Supplier']),
+    lead_time_dias: num(['Lead Time', 'Reabasto Dias']),
+    origen: str(['Origen', 'Origin']),
+    dificultad_logistica: num(['Dificultad Logistica']),
+    compra_minima: num(['Compra Minima', 'Min Order']),
+    unidad_medida: str(['U.M', 'Unidad', 'UOM']),
+    consumo_m1: num(['Consumo mes 1']),
+    consumo_m2: num(['Consumo mes 2']),
+    consumo_m3: num(['Consumo mes 3']),
+    consumo_m4: num(['Consumo mes 4']),
+    consumo_m5: num(['Consumo mes 5']),
+    consumo_m6: num(['Consumo mes 6']),
+    consumo_m7: num(['Consumo mes 7']),
+    consumo_m8: num(['Consumo mes 8']),
+    consumo_promedio: num(['Consumo Promedio', 'Consumo Promedio Mensual']),
+    consumo_diario: num(['CM x Dia', 'Consumo Diario']),
+    desv_estandar: num(['Desv Estandar', 'Desviacion']),
+    inventario: num(['Inventario', 'SaldoActual']),
+    reserva: num(['Reserva', 'Total Reservas']),
+    inventario_disponible: num(['Inventario Disponible']),
+    transito: num(['Transito', 'TransitoProceso']),
+    inventario_total: num(['Inventario Total']),
+    dias_cobertura: num(['Dias de Cobertura']),
+    minimo_inventario: num(['Minimo de Inventario', 'Min Inventario']),
+    dias_stock: num(['Dias de Stock']),
+    stock_seguridad: num(['Stock de Seguridad', 'Safety Stock']),
+    punto_reorden: num(['P Reorden', 'Reorder Point']),
+    max_inventario: num(['Max Inventario']),
+    costo_unitario: num(['Costo Unitario', 'Costo Unitario Articulo', 'ValorDolar']),
+    costo_inventario: num(['Costo del Inventario', 'Costo Inventario']),
+    costo_inventario_transito: num(['Costo Inventario Transito']),
+    costo_total_inventario: num(['Costo Total del Inventario', 'Costo Total']),
+    costo_stock_seguridad: num(['Costo Stock de Seguridad']),
+    costo_inv_min: num(['Costo Inventario MIN']),
+    costo_inv_reorden: num(['Costo Inventario P.Reorden']),
+    costo_inv_max: num(['Costo Inventario MAX']),
+    alerta_desabasto: str(['Alerta de Desabasto', 'Alerta']),
+    hacer_pedido: str(['Hacer Pedido']),
+    cantidad_requerida: num(['Cantidad Requerida', 'Cantidad Requerida Redondeada']),
+    analisis_parametros: str(['Analisis Parametros']),
+    familia: str(['FAMILIAS', 'Familia']),
+    infaltable: str(['Infaltable']),
+    descontinuado: str(['Descontinuado']),
+    subclasificacion: str(['Subclasificacion', 'Subclas']),
+  };
+}
+
 async function callTreasuryTool(tool: string, params: Record<string, unknown>) {
   const res = await fetch(`${SUPABASE_URL}/functions/v1/treasury-tools`, {
     method: 'POST',
@@ -52,6 +123,7 @@ export function DataSources() {
   const [loadingRuns, setLoadingRuns] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [progress, setProgress] = useState<{ current: number; total: number; stage: string } | null>(null);
   const [infra, setInfra] = useState<InfraStatus>({ bucket: 'checking', edgeFunction: 'checking', schema: 'checking' });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -179,17 +251,20 @@ export function DataSources() {
   };
 
   /**
-   * Parse XLSX/CSV client-side (browser has plenty of memory),
-   * detect format, and send structured JSON to the Edge Function.
-   * Falls back to server-side parsing for small files (<1MB).
+   * Parse XLSX/CSV client-side and ingest data.
+   * For MRP files: inserts directly via Supabase JS client in chunks (bypasses Edge Function).
+   * For CxP/Flujo files: sends to Edge Function.
+   * Handles very large files (30K+ rows) with progress tracking.
    */
   const handleIngest = async (fileName: string) => {
     setIngesting(fileName);
     setError('');
     setSuccess('');
+    setProgress(null);
 
     try {
       // Download the file from Supabase Storage
+      setProgress({ current: 0, total: 0, stage: 'Descargando archivo...' });
       const { data: fileBlob, error: dlErr } = await supabase.storage
         .from('treasury-files')
         .download(fileName);
@@ -200,6 +275,7 @@ export function DataSources() {
 
       // For small files (<1MB), use the server-side Edge Function directly
       if (fileBlob.size < 1024 * 1024) {
+        setProgress({ current: 0, total: 0, stage: 'Procesando en servidor...' });
         const result = await callTreasuryTool('ingest_excel', { file_id: fileName });
         if (result.error) {
           setError(`Ingest failed: ${result.error}`);
@@ -213,6 +289,7 @@ export function DataSources() {
       }
 
       // Client-side XLSX parsing for larger files
+      setProgress({ current: 0, total: 0, stage: 'Parseando Excel en navegador...' });
       const arrayBuffer = await fileBlob.arrayBuffer();
       const workbook = XLSX.read(new Uint8Array(arrayBuffer), {
         type: 'array',
@@ -236,31 +313,45 @@ export function DataSources() {
         return rowTexts.filter((t) => headerTexts.has(t)).length >= 3;
       };
 
-      // Process each sheet
-      const sheets: Array<{
+      // ── Find the best MRP sheet (most columns) ───────────────────────────
+      // MRP workbooks have 18+ sheets but only the main "MRP" sheet has 80 columns.
+      // We process ONLY the main sheet and skip supporting lookup sheets.
+      type ParsedSheet = {
         name: string;
         format: string;
         headers: string[];
         rows: (string | number | null)[][];
-      }> = [];
+      };
+      const sheets: ParsedSheet[] = [];
+      let bestMrpSheet: ParsedSheet | null = null;
 
-      for (const sheetName of workbook.SheetNames) {
+      setProgress({ current: 0, total: workbook.SheetNames.length, stage: 'Analizando hojas...' });
+
+      for (let si = 0; si < workbook.SheetNames.length; si++) {
+        const sheetName = workbook.SheetNames[si];
         const sheet = workbook.Sheets[sheetName];
         if (!sheet) continue;
+        setProgress({ current: si + 1, total: workbook.SheetNames.length, stage: `Analizando: ${sheetName}` });
+
+        // If we already found a main MRP sheet, skip remaining sheets
+        // (they are VLOOKUP lookup tables, already consolidated in the main sheet)
+        if (bestMrpSheet && bestMrpSheet.headers.length > 20) {
+          delete workbook.Sheets[sheetName];
+          continue;
+        }
 
         const allRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as (
           | string
           | number
         )[][];
-
-        // Free memory
-        delete workbook.Sheets[sheetName];
+        delete workbook.Sheets[sheetName]; // free memory
 
         if (allRows.length < 2) continue;
 
-        // Find header row
+        // Find header row — pick the row with the MOST text cells (for MRP's 2-row header)
         let headerIdx = -1;
         let header: string[] = [];
+        let bestTextCount = 0;
         for (let i = 0; i < Math.min(allRows.length, 20); i++) {
           const cells = allRows[i];
           const nonEmpty = cells.filter((c) => c !== '').length;
@@ -268,9 +359,11 @@ export function DataSources() {
             (c) => typeof c === 'string' && String(c).length > 1
           );
           if (textCells.length >= 3 && nonEmpty >= 3 && textCells.length / nonEmpty > 0.4) {
-            headerIdx = i;
-            header = cells.map(String);
-            break;
+            if (textCells.length > bestTextCount) {
+              bestTextCount = textCells.length;
+              headerIdx = i;
+              header = cells.map(String);
+            }
           }
         }
         if (headerIdx < 0 || header.length < 2) continue;
@@ -290,24 +383,37 @@ export function DataSources() {
         ).length;
 
         const flujoScore = [
-          'Compañía',
-          'Operación',
-          'Principal',
-          'Intereses',
-          'Cuota',
-          'Capital',
+          'Compañía', 'Operación', 'Principal', 'Intereses', 'Cuota', 'Capital',
+        ].filter((k) => colIndex(header, [k]) >= 0).length;
+
+        const mrpScore = [
+          'Codigo', 'Descripcion', 'Proveedor', 'Inventario',
+          'Consumo', 'ABC', 'Costo', 'Stock',
         ].filter((k) => colIndex(header, [k]) >= 0).length;
 
         let format = 'generic';
-        if (cxpScore >= 3) format = 'cxp';
+        if (mrpScore >= 5) format = 'mrp';
+        else if (cxpScore >= 3) format = 'cxp';
         else if (flujoScore >= 3) format = 'flujo';
 
-        sheets.push({
-          name: sheetName,
-          format,
-          headers: header,
-          rows: dataRows,
-        });
+        const parsed: ParsedSheet = { name: sheetName, format, headers: header, rows: dataRows };
+
+        if (format === 'mrp') {
+          // Keep only the sheet with the most columns (the main MRP sheet)
+          if (!bestMrpSheet || header.length > bestMrpSheet.headers.length) {
+            bestMrpSheet = parsed;
+          }
+        } else if (format !== 'generic' || dataRows.length > 5) {
+          sheets.push(parsed);
+        }
+      }
+
+      // If we found an MRP sheet, ONLY process that sheet.
+      // All other sheets in an MRP workbook are VLOOKUP sources already
+      // consolidated into the main sheet — no need to ingest them separately.
+      if (bestMrpSheet) {
+        sheets.length = 0; // clear all non-MRP sheets
+        sheets.push(bestMrpSheet);
       }
 
       if (sheets.length === 0) {
@@ -315,24 +421,140 @@ export function DataSources() {
         return;
       }
 
-      // Send parsed data to Edge Function
-      const result = await callTreasuryTool('ingest_parsed_data', {
-        source_file: fileName,
-        sheets,
-      });
+      // ── Split MRP (direct browser insert) vs others (Edge Function) ───────
+      const mrpSheets = sheets.filter(s => s.format === 'mrp');
+      const nonMrpSheets = sheets.filter(s => s.format !== 'mrp');
 
-      if (result.error) {
-        setError(`Ingest failed: ${result.error}`);
-      } else {
-        setSuccess(
-          `Ingested "${fileName}": ${result.rows_inserted} rows processed from ${result.sheets_processed?.length || 0} sheet(s). Run ID: ${result.ingest_run_id}`
-        );
-        await fetchIngestRuns();
+      let totalInserted = 0;
+      const sheetsProcessed: string[] = [];
+
+      // Create ingest run record
+      const { data: ingestRow, error: insErr } = await supabase
+        .schema('bronze_finance' as 'public')
+        .from('ingest_runs')
+        .insert({ source_file: fileName, status: 'processing' })
+        .select('id')
+        .single();
+
+      if (insErr) {
+        throw new Error(`Could not create ingest run: ${insErr.message}`);
       }
+      const ingestRunId = ingestRow?.id as string;
+
+      // ── MRP: Direct chunked inserts from browser ──────────────────────────
+      for (const mrpSheet of mrpSheets) {
+        const { name: sheetName, headers: header, rows: dataRows } = mrpSheet;
+        const CHUNK = 100;
+        const totalChunks = Math.ceil(dataRows.length / CHUNK);
+        let sheetInserted = 0;
+        let lastError: string | null = null;
+
+        setProgress({ current: 0, total: dataRows.length, stage: `Ingresando MRP: ${sheetName} (${dataRows.length.toLocaleString()} filas)...` });
+
+        for (let c = 0; c < totalChunks; c++) {
+          const chunk = dataRows.slice(c * CHUNK, (c + 1) * CHUNK);
+          const mapped = chunk
+            .map(row => mapMRPRow(row, header, ingestRunId))
+            .filter(r => r.codigo || r.descripcion);
+
+          if (mapped.length > 0) {
+            const { error: batchErr } = await supabase
+              .schema('silver_finance' as 'public')
+              .from('mrp_master')
+              .insert(mapped);
+
+            if (batchErr) {
+              console.error(`MRP batch ${c} error:`, batchErr.message);
+              lastError = batchErr.message;
+            } else {
+              sheetInserted += mapped.length;
+            }
+          }
+
+          setProgress({
+            current: Math.min((c + 1) * CHUNK, dataRows.length),
+            total: dataRows.length,
+            stage: `Ingresando MRP: ${sheetName} — ${sheetInserted.toLocaleString()} filas insertadas...`,
+          });
+
+          // Yield to UI thread every 10 chunks
+          if (c % 10 === 0) await new Promise(r => setTimeout(r, 0));
+        }
+
+        if (sheetInserted > 0) {
+          totalInserted += sheetInserted;
+          sheetsProcessed.push(`${sheetName}(MRP:${sheetInserted}${lastError ? ',partial' : ''})`);
+        } else if (lastError) {
+          sheetsProcessed.push(`${sheetName}(MRP:ERROR:${lastError.slice(0, 120)})`);
+        }
+      }
+
+      // ── Non-MRP sheets: send to Edge Function in chunks too ───────────────
+      if (nonMrpSheets.length > 0) {
+        const SHEET_CHUNK_ROWS = 500; // max rows per Edge Function call
+
+        for (const sheet of nonMrpSheets) {
+          const totalRows = sheet.rows.length;
+          const chunks = Math.ceil(totalRows / SHEET_CHUNK_ROWS);
+
+          for (let c = 0; c < chunks; c++) {
+            const chunkRows = sheet.rows.slice(c * SHEET_CHUNK_ROWS, (c + 1) * SHEET_CHUNK_ROWS);
+            setProgress({
+              current: Math.min((c + 1) * SHEET_CHUNK_ROWS, totalRows),
+              total: totalRows,
+              stage: `Ingresando ${sheet.format}: ${sheet.name}...`,
+            });
+
+            try {
+              const result = await callTreasuryTool('ingest_parsed_data', {
+                source_file: fileName,
+                sheets: [{
+                  name: sheet.name,
+                  format: sheet.format,
+                  headers: sheet.headers,
+                  rows: chunkRows,
+                }],
+              });
+              if (result.rows_inserted > 0) {
+                totalInserted += result.rows_inserted;
+              }
+              if (result.sheets_processed) {
+                sheetsProcessed.push(...result.sheets_processed);
+              }
+            } catch (e) {
+              console.error(`Non-MRP sheet ${sheet.name} chunk ${c} error:`, e);
+              sheetsProcessed.push(`${sheet.name}(${sheet.format}:ERROR:${(e as Error).message?.slice(0, 80)})`);
+            }
+          }
+        }
+      }
+
+      // ── Finalize ingest run ───────────────────────────────────────────────
+      await supabase
+        .schema('bronze_finance' as 'public')
+        .from('ingest_runs')
+        .update({
+          status: totalInserted > 0 ? 'completed' : 'failed',
+          rows_inserted: totalInserted,
+          completed_at: new Date().toISOString(),
+          metadata: { sheets_processed: sheetsProcessed, parsing: 'client-side-chunked' },
+          error_message: totalInserted === 0 ? 'No rows matched known formats' : null,
+        })
+        .eq('id', ingestRunId);
+
+      if (totalInserted > 0) {
+        setSuccess(
+          `Ingested "${fileName}": ${totalInserted.toLocaleString()} rows from ${sheetsProcessed.length} sheet(s). Run ID: ${ingestRunId.slice(0, 8)}...`
+        );
+      } else {
+        setError(`Ingest completed but 0 rows inserted. Sheets: ${sheetsProcessed.join(', ')}`);
+      }
+      await fetchIngestRuns();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ingest failed');
     } finally {
       setIngesting(null);
+      setProgress(null);
     }
   };
 
@@ -476,6 +698,32 @@ export function DataSources() {
           </div>
         )}
 
+        {/* Progress indicator */}
+        {progress && (
+          <Card className="border-blue-200 bg-blue-50/50">
+            <CardContent className="p-4">
+              <div className="flex items-center gap-3 mb-2">
+                <LoadingSpinner size="sm" />
+                <span className="text-sm font-medium text-blue-800">{progress.stage}</span>
+              </div>
+              {progress.total > 0 && (
+                <div className="space-y-1">
+                  <div className="w-full bg-blue-100 rounded-full h-2.5">
+                    <div
+                      className="bg-[#1A4A28] h-2.5 rounded-full transition-all duration-300"
+                      style={{ width: `${Math.min(100, (progress.current / progress.total) * 100)}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-blue-600 text-right">
+                    {progress.current.toLocaleString()} / {progress.total.toLocaleString()}
+                    {' '}({Math.round((progress.current / progress.total) * 100)}%)
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         {/* Upload drop zone */}
         <Card>
           <CardContent className="p-8">
@@ -561,7 +809,7 @@ export function DataSources() {
                           {isIngesting ? (
                             <>
                               <LoadingSpinner size="sm" className="mr-1" />
-                              Processing...
+                              {progress ? `${Math.round((progress.current / Math.max(1, progress.total)) * 100)}%` : 'Processing...'}
                             </>
                           ) : (
                             <>

@@ -1,11 +1,12 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, Database, Briefcase, Settings, Landmark, Target } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Database, Briefcase, Settings, Landmark, Target, ShoppingCart } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
 const navigation = [
   { name: 'Panel Ejecutivo', href: '/', icon: LayoutDashboard },
   { name: 'Cashflow', href: '/cashflow', icon: Target },
   { name: 'Crédito', href: '/credito', icon: Landmark },
+  { name: 'Compras', href: '/compras', icon: ShoppingCart },
   { name: 'AI Chat', href: '/chat', icon: MessageSquare },
   { name: 'Fuentes de Datos', href: '/data', icon: Database },
   { name: 'Proyectos', href: '/projects', icon: Briefcase },
