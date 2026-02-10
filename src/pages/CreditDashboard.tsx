@@ -8,13 +8,34 @@ import { KPICard } from '../components/dashboard/KPICard';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
+import { RecordDetailModal, type FieldDef } from '../components/ui/RecordDetailModal';
 import {
   formatCurrency, formatCompactCurrency, formatMonthYear, formatShortDate,
   formatDate, semaphore, ARA_COLORS,
 } from '../lib/utils';
+import { useExchangeRate, toUSD, normalizeCurrency } from '../hooks/useExchangeRate';
 import {
   querySQL, type FlujoItem, type TimePeriod, getDateCutoff, PERIOD_LABELS, tooltipStyle,
 } from '../lib/queries';
+
+const CREDIT_FIELDS: FieldDef[] = [
+  { key: 'operacion', label: 'Operación', type: 'text', group: 'Identificación' },
+  { key: 'compania', label: 'Compañía', type: 'text' },
+  { key: 'banco', label: 'Banco', type: 'text' },
+  { key: 'tipo', label: 'Tipo de Crédito', type: 'select', options: ['Largo Plazo', 'Capital Trabajo', 'Leasing', 'Línea Revolving'] },
+  { key: 'moneda', label: 'Moneda', type: 'select', options: ['CRC', 'USD'] },
+  { key: 'saldo_original', label: 'Saldo Original', type: 'currency', group: 'Financiero', highlight: true },
+  { key: 'capital', label: 'Capital', type: 'currency' },
+  { key: 'capital_actualizado', label: 'Capital Actualizado', type: 'currency' },
+  { key: 'cuota', label: 'Cuota', type: 'currency' },
+  { key: 'principal', label: 'Principal', type: 'currency' },
+  { key: 'intereses', label: 'Intereses', type: 'currency' },
+  { key: 'vencimiento', label: 'Vencimiento', type: 'date', group: 'Plazos' },
+  { key: 'semana_inicio', label: 'Semana Inicio', type: 'date' },
+  { key: 'semana_fin', label: 'Semana Fin', type: 'date' },
+  { key: 'ingest_run_id', label: 'Run de Ingesta', type: 'readonly', group: 'Metadata' },
+  { key: 'created_at', label: 'Fecha de Creación', type: 'readonly' },
+];
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
   PieChart, Pie, Cell, ComposedChart, Line, Area,
@@ -28,6 +49,14 @@ export function CreditDashboard() {
   const [flujoAll, setFlujoAll] = useState<FlujoItem[]>([]);
   const [period, setPeriod] = useState<TimePeriod>('all');
   const [lastRefresh, setLastRefresh] = useState(new Date());
+  const [detailRecord, setDetailRecord] = useState<Record<string, unknown> | null>(null);
+
+  const { rate } = useExchangeRate();
+
+  /** Convert a flujo item's amount field to USD for aggregation */
+  const asUSD = useCallback((item: FlujoItem, field: 'cuota' | 'principal' | 'intereses' | 'saldo_original' | 'capital' | 'capital_actualizado') => {
+    return toUSD(Number(item[field]) || 0, item.moneda, rate);
+  }, [rate]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -49,12 +78,12 @@ export function CreditDashboard() {
   const cutoff = getDateCutoff(period);
   const flujo = useMemo(() => cutoff ? flujoAll.filter(r => (r.vencimiento || r.created_at) >= cutoff) : flujoAll, [flujoAll, cutoff]);
 
-  // ── Metrics ────────────────────────────────────────────────────────────────
-  const totalCuota = flujo.reduce((s, r) => s + (Number(r.cuota) || 0), 0);
-  const totalPrincipal = flujo.reduce((s, r) => s + (Number(r.principal) || 0), 0);
-  const totalIntereses = flujo.reduce((s, r) => s + (Number(r.intereses) || 0), 0);
-  const totalSaldo = flujo.reduce((s, r) => s + (Number(r.saldo_original) || 0), 0);
-  const totalCapAct = flujo.reduce((s, r) => s + (Number(r.capital_actualizado) || 0), 0);
+  // ── Metrics (all converted to USD for aggregation) ──────────────────────
+  const totalCuota = flujo.reduce((s, r) => s + asUSD(r, 'cuota'), 0);
+  const totalPrincipal = flujo.reduce((s, r) => s + asUSD(r, 'principal'), 0);
+  const totalIntereses = flujo.reduce((s, r) => s + asUSD(r, 'intereses'), 0);
+  const totalSaldo = flujo.reduce((s, r) => s + asUSD(r, 'saldo_original'), 0);
+  const totalCapAct = flujo.reduce((s, r) => s + asUSD(r, 'capital_actualizado'), 0);
   const intRatio = totalPrincipal > 0 ? (totalIntereses / totalPrincipal) * 100 : 0;
   const now = new Date();
   const nowMs = now.getTime();
@@ -71,34 +100,34 @@ export function CreditDashboard() {
   const uniqueBanks = useMemo(() => new Set(flujo.map(r => r.banco).filter(Boolean)), [flujo]);
   const uniqueCompanies = useMemo(() => new Set(flujo.map(r => r.compania).filter(Boolean)), [flujo]);
 
-  // ── By Tipo ────────────────────────────────────────────────────────────────
+  // ── By Tipo (USD) ──────────────────────────────────────────────────────────
   const opsByTipo = useMemo(() => {
     const map: Record<string, { tipo: string; cuota: number; principal: number; intereses: number; saldo: number; count: number }> = {};
     flujo.forEach(r => {
       const t = r.tipo || 'Otro';
       if (!map[t]) map[t] = { tipo: t, cuota: 0, principal: 0, intereses: 0, saldo: 0, count: 0 };
-      map[t].cuota += Number(r.cuota) || 0;
-      map[t].principal += Number(r.principal) || 0;
-      map[t].intereses += Number(r.intereses) || 0;
-      map[t].saldo += Number(r.saldo_original) || 0;
+      map[t].cuota += asUSD(r, 'cuota');
+      map[t].principal += asUSD(r, 'principal');
+      map[t].intereses += asUSD(r, 'intereses');
+      map[t].saldo += asUSD(r, 'saldo_original');
       map[t].count++;
     });
     return Object.values(map).sort((a, b) => b.cuota - a.cuota);
-  }, [flujo]);
+  }, [flujo, asUSD]);
 
-  // ── By Banco ───────────────────────────────────────────────────────────────
+  // ── By Banco (USD) ────────────────────────────────────────────────────────
   const bancoComp = useMemo(() => {
     const map: Record<string, { banco: string; principal: number; intereses: number; cuota: number; saldo: number }> = {};
     flujo.forEach(r => {
       const b = r.banco || 'Sin banco';
       if (!map[b]) map[b] = { banco: b, principal: 0, intereses: 0, cuota: 0, saldo: 0 };
-      map[b].principal += Number(r.principal) || 0;
-      map[b].intereses += Number(r.intereses) || 0;
-      map[b].cuota += Number(r.cuota) || 0;
-      map[b].saldo += Number(r.saldo_original) || 0;
+      map[b].principal += asUSD(r, 'principal');
+      map[b].intereses += asUSD(r, 'intereses');
+      map[b].cuota += asUSD(r, 'cuota');
+      map[b].saldo += asUSD(r, 'saldo_original');
     });
     return Object.values(map).sort((a, b) => b.cuota - a.cuota).slice(0, 10);
-  }, [flujo]);
+  }, [flujo, asUSD]);
 
   // ── Gantt data ─────────────────────────────────────────────────────────────
   const ganttData = useMemo(() => {
@@ -109,7 +138,8 @@ export function CreditDashboard() {
       const dates = items.map(i => i.vencimiento || i.created_at).filter(Boolean).sort();
       if (!dates.length) return;
       const f = items[0];
-      lines.push({ id: key, operacion: f.operacion || '—', compania: f.compania || '—', banco: f.banco || '—', tipo: f.tipo || '—', start: dates[0], end: dates[dates.length - 1], saldo: Math.max(...items.map(i => Number(i.saldo_original) || 0)), cuotaTotal: items.reduce((s, i) => s + (Number(i.cuota) || 0), 0), moneda: f.moneda || 'CRC', startMs: new Date(dates[0]).getTime(), endMs: new Date(dates[dates.length - 1]).getTime() });
+      const itemMoneda = f.moneda || 'CRC';
+      lines.push({ id: key, operacion: f.operacion || '—', compania: f.compania || '—', banco: f.banco || '—', tipo: f.tipo || '—', start: dates[0], end: dates[dates.length - 1], saldo: Math.max(...items.map(i => Number(i.saldo_original) || 0)), cuotaTotal: items.reduce((s, i) => s + (Number(i.cuota) || 0), 0), moneda: itemMoneda, startMs: new Date(dates[0]).getTime(), endMs: new Date(dates[dates.length - 1]).getTime() });
     });
     return lines.sort((a, b) => a.startMs - b.startMs);
   }, [flujo]);
@@ -118,20 +148,20 @@ export function CreditDashboard() {
   const ganttMax = ganttData.length ? Math.max(...ganttData.map(g => g.endMs)) : nowMs;
   const ganttSpan = Math.max(ganttMax - ganttMin, 1);
 
-  // ── Capital evolution ──────────────────────────────────────────────────────
+  // ── Capital evolution (USD) ────────────────────────────────────────────────
   const capEvol = useMemo(() => {
     const m: Record<string, { month: string; saldo_original: number; capital_actualizado: number; principal: number; intereses: number }> = {};
     flujo.forEach(r => {
       const k = (r.vencimiento || r.created_at || '').slice(0, 7);
       if (!k) return;
       if (!m[k]) m[k] = { month: k, saldo_original: 0, capital_actualizado: 0, principal: 0, intereses: 0 };
-      m[k].saldo_original += Number(r.saldo_original) || 0;
-      m[k].capital_actualizado += Number(r.capital_actualizado) || 0;
-      m[k].principal += Number(r.principal) || 0;
-      m[k].intereses += Number(r.intereses) || 0;
+      m[k].saldo_original += asUSD(r, 'saldo_original');
+      m[k].capital_actualizado += asUSD(r, 'capital_actualizado');
+      m[k].principal += asUSD(r, 'principal');
+      m[k].intereses += asUSD(r, 'intereses');
     });
     return Object.values(m).sort((a, b) => a.month.localeCompare(b.month)).map(x => ({ ...x, label: formatMonthYear(x.month + '-01') }));
-  }, [flujo]);
+  }, [flujo, asUSD]);
 
   // ── By Moneda ──────────────────────────────────────────────────────────────
   const byMoneda = useMemo(() => {
@@ -145,19 +175,19 @@ export function CreditDashboard() {
     return Object.values(m);
   }, [flujo]);
 
-  // By Compania
+  // By Compania (USD)
   const byCompania = useMemo(() => {
     const m: Record<string, { compania: string; cuota: number; principal: number; intereses: number; saldo: number }> = {};
     flujo.forEach(r => {
       const c = r.compania || 'Sin compañía';
       if (!m[c]) m[c] = { compania: c, cuota: 0, principal: 0, intereses: 0, saldo: 0 };
-      m[c].cuota += Number(r.cuota) || 0;
-      m[c].principal += Number(r.principal) || 0;
-      m[c].intereses += Number(r.intereses) || 0;
-      m[c].saldo += Number(r.saldo_original) || 0;
+      m[c].cuota += asUSD(r, 'cuota');
+      m[c].principal += asUSD(r, 'principal');
+      m[c].intereses += asUSD(r, 'intereses');
+      m[c].saldo += asUSD(r, 'saldo_original');
     });
     return Object.values(m).sort((a, b) => b.cuota - a.cuota);
-  }, [flujo]);
+  }, [flujo, asUSD]);
 
   // ── Insights ───────────────────────────────────────────────────────────────
   const insights: { type: 'insight' | 'risk' | 'action'; text: string }[] = [];
@@ -178,7 +208,7 @@ export function CreditDashboard() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Operaciones & Líneas de Crédito</h1>
-            <p className="text-gray-500 mt-1 text-sm">Control longitudinal de crédito, bancos, composición y vencimientos (₡ CRC)</p>
+            <p className="text-gray-500 mt-1 text-sm">Control longitudinal de crédito, bancos, composición y vencimientos ($ USD)</p>
           </div>
           <div className="flex items-center gap-3">
             <div className="flex bg-gray-100 rounded-lg p-0.5">
@@ -238,15 +268,20 @@ export function CreditDashboard() {
                       const isExpired = g.endMs < nowMs;
                       const barColor = TIPO_COLORS[g.tipo] || CREDIT_COLORS[idx % CREDIT_COLORS.length];
                       return (
-                        <div key={g.id} className="flex items-center group hover:bg-gray-50/50 rounded py-0.5">
+                        <div key={g.id} className="flex items-center group hover:bg-gray-50/50 rounded py-0.5 cursor-pointer"
+                          onDoubleClick={() => {
+                            const op = flujo.find(f => f.operacion === g.operacion && f.banco === g.banco && f.compania === g.compania);
+                            if (op) setDetailRecord(op as unknown as Record<string, unknown>);
+                          }}
+                          title="Doble clic para ver/editar detalle de la operación">
                           <div className="w-[280px] shrink-0 pr-3">
                             <p className="text-[11px] font-medium text-gray-800 truncate" title={g.operacion}>{g.operacion.length > 30 ? g.operacion.slice(0, 27) + '...' : g.operacion}</p>
-                            <p className="text-[9px] text-gray-400 truncate">{g.compania} · {g.banco} · {formatCompactCurrency(g.saldo)}</p>
+                            <p className="text-[9px] text-gray-400 truncate">{g.compania} · {g.banco} · {formatCompactCurrency(g.saldo, normalizeCurrency(g.moneda))}</p>
                           </div>
                           <div className="flex-1 relative h-6 bg-gray-100 rounded overflow-hidden">
                             <div className={`absolute top-0.5 bottom-0.5 rounded ${isExpired ? 'opacity-40' : 'opacity-85'}`}
                               style={{ left: `${leftPct}%`, width: `${widthPct}%`, backgroundColor: barColor, minWidth: '4px' }}
-                              title={`${g.operacion}\n${formatShortDate(g.start)} → ${formatShortDate(g.end)}\nSaldo: ${formatCompactCurrency(g.saldo)}`} />
+                              title={`${g.operacion}\n${formatShortDate(g.start)} → ${formatShortDate(g.end)}\nSaldo: ${formatCompactCurrency(g.saldo, normalizeCurrency(g.moneda))}`} />
                             {nowPct >= 0 && nowPct <= 100 && <div className="absolute top-0 bottom-0 w-px bg-red-500 z-10" style={{ left: `${nowPct}%` }} />}
                           </div>
                         </div>
@@ -255,6 +290,7 @@ export function CreditDashboard() {
                   </div>
                   <p className="text-[10px] text-gray-400 mt-2 text-center">
                     {ganttData.length} operaciones · {ganttData.filter(g => g.endMs >= nowMs).length} vigentes · {ganttData.filter(g => g.endMs < nowMs).length} vencidas
+                    <span className="italic ml-2">· Doble clic en una operación para ver/editar detalle</span>
                   </p>
                 </div>
               </CardContent>
@@ -263,7 +299,7 @@ export function CreditDashboard() {
             {/* Tipo + Banco composition */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <Card>
-                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Layers className="w-4 h-4 text-[#1A4A28]" />Operaciones por Tipo de Crédito (₡)</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Layers className="w-4 h-4 text-[#1A4A28]" />Operaciones por Tipo de Crédito ($)</CardTitle></CardHeader>
                 <CardContent>
                   <ResponsiveContainer width="100%" height={280}>
                     <BarChart data={opsByTipo}>
@@ -272,14 +308,14 @@ export function CreditDashboard() {
                       <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
                       <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
                       <Legend wrapperStyle={{ fontSize: 10 }} />
-                      <Bar dataKey="principal" stackId="a" fill={ARA_COLORS.primary} name="Principal ₡" />
-                      <Bar dataKey="intereses" stackId="a" fill={ARA_COLORS.gold} name="Intereses ₡" radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="principal" stackId="a" fill={ARA_COLORS.primary} name="Principal $" />
+                      <Bar dataKey="intereses" stackId="a" fill={ARA_COLORS.gold} name="Intereses $" radius={[3, 3, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </CardContent>
               </Card>
               <Card>
-                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Landmark className="w-4 h-4 text-[#1A4A28]" />Principal vs Intereses por Banco (₡)</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Landmark className="w-4 h-4 text-[#1A4A28]" />Principal vs Intereses por Banco ($)</CardTitle></CardHeader>
                 <CardContent>
                   <ResponsiveContainer width="100%" height={280}>
                     <BarChart data={bancoComp.map(b => ({ ...b, banco: b.banco.length > 15 ? b.banco.slice(0, 12) + '...' : b.banco }))} layout="vertical" margin={{ left: 10 }}>
@@ -288,8 +324,8 @@ export function CreditDashboard() {
                       <YAxis type="category" dataKey="banco" stroke="#9ca3af" fontSize={9} width={100} />
                       <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
                       <Legend wrapperStyle={{ fontSize: 10 }} />
-                      <Bar dataKey="principal" stackId="a" fill={ARA_COLORS.primary} name="Principal ₡" />
-                      <Bar dataKey="intereses" stackId="a" fill={ARA_COLORS.orange} name="Intereses ₡" radius={[0, 3, 3, 0]} />
+                      <Bar dataKey="principal" stackId="a" fill={ARA_COLORS.primary} name="Principal $" />
+                      <Bar dataKey="intereses" stackId="a" fill={ARA_COLORS.orange} name="Intereses $" radius={[0, 3, 3, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </CardContent>
@@ -299,7 +335,7 @@ export function CreditDashboard() {
             {/* Capital Evolution + Moneda + Compania */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <Card className="lg:col-span-2">
-                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Activity className="w-4 h-4 text-[#1A4A28]" />Evolución Longitudinal: Saldo vs Capital Actualizado (₡)</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Activity className="w-4 h-4 text-[#1A4A28]" />Evolución Longitudinal: Saldo vs Capital Actualizado ($)</CardTitle></CardHeader>
                 <CardContent>
                   {capEvol.length > 0 ? (
                     <ResponsiveContainer width="100%" height={300}>
@@ -310,9 +346,9 @@ export function CreditDashboard() {
                         <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
                         <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
                         <Legend wrapperStyle={{ fontSize: 10 }} />
-                        <Area type="monotone" dataKey="saldo_original" stroke={ARA_COLORS.blue} strokeWidth={2} fill="url(#sGrad)" name="Saldo Original ₡" />
-                        <Line type="monotone" dataKey="capital_actualizado" stroke={ARA_COLORS.gold} strokeWidth={2} dot={{ r: 3 }} name="Capital Vigente ₡" />
-                        <Bar dataKey="principal" fill={ARA_COLORS.primary} name="Amortización ₡" radius={[2, 2, 0, 0]} opacity={0.6} />
+                        <Area type="monotone" dataKey="saldo_original" stroke={ARA_COLORS.blue} strokeWidth={2} fill="url(#sGrad)" name="Saldo Original $" />
+                        <Line type="monotone" dataKey="capital_actualizado" stroke={ARA_COLORS.gold} strokeWidth={2} dot={{ r: 3 }} name="Capital Vigente $" />
+                        <Bar dataKey="principal" fill={ARA_COLORS.primary} name="Amortización $" radius={[2, 2, 0, 0]} opacity={0.6} />
                       </ComposedChart>
                     </ResponsiveContainer>
                   ) : <EmptyState text="Sin datos de evolución." />}
@@ -336,7 +372,7 @@ export function CreditDashboard() {
                         {byMoneda.map(m => (
                           <div key={m.moneda} className="flex items-center justify-between text-xs">
                             <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: m.moneda === 'CRC' ? ARA_COLORS.primary : ARA_COLORS.blue }} />{m.moneda === 'CRC' ? 'Colones (₡)' : 'Dólares ($)'}</span>
-                            <span className="font-semibold tabular-nums">{m.count} ops · {formatCompactCurrency(m.cuota)}</span>
+                            <span className="font-semibold tabular-nums">{m.count} ops · {formatCompactCurrency(m.cuota, m.moneda)}</span>
                           </div>
                         ))}
                       </div>
@@ -348,7 +384,7 @@ export function CreditDashboard() {
 
             {/* Cuotas por Compañía */}
             <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Landmark className="w-4 h-4 text-[#1A4A28]" />Distribución de Cuotas por Compañía (₡)</CardTitle></CardHeader>
+              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Landmark className="w-4 h-4 text-[#1A4A28]" />Distribución de Cuotas por Compañía ($)</CardTitle></CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={260}>
                   <BarChart data={byCompania.map(c => ({ ...c, compania: c.compania.length > 20 ? c.compania.slice(0, 17) + '...' : c.compania }))}>
@@ -357,8 +393,8 @@ export function CreditDashboard() {
                     <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
                     <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
                     <Legend wrapperStyle={{ fontSize: 10 }} />
-                    <Bar dataKey="principal" stackId="a" fill={ARA_COLORS.primary} name="Principal ₡" />
-                    <Bar dataKey="intereses" stackId="a" fill={ARA_COLORS.gold} name="Intereses ₡" radius={[3, 3, 0, 0]} />
+                    <Bar dataKey="principal" stackId="a" fill={ARA_COLORS.primary} name="Principal $" />
+                    <Bar dataKey="intereses" stackId="a" fill={ARA_COLORS.gold} name="Intereses $" radius={[3, 3, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </CardContent>
@@ -372,28 +408,29 @@ export function CreditDashboard() {
                   <table className="w-full text-sm">
                     <thead><tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wider">
                       <th className="pb-2 pr-3">Operación</th><th className="pb-2 pr-3">Compañía</th><th className="pb-2 pr-3">Banco</th>
-                      <th className="pb-2 pr-3">Tipo</th><th className="pb-2 pr-3 text-right">Saldo Original ₡</th>
-                      <th className="pb-2 pr-3 text-right">Cuota ₡</th><th className="pb-2 pr-3">Vencimiento</th><th className="pb-2">Moneda</th>
+                      <th className="pb-2 pr-3">Tipo</th><th className="pb-2 pr-3 text-right">Saldo Original</th>
+                      <th className="pb-2 pr-3 text-right">Cuota</th><th className="pb-2 pr-3">Vencimiento</th><th className="pb-2">Moneda</th>
                     </tr></thead>
                     <tbody className="divide-y divide-gray-50">
                       {uniqueOps.slice(0, 25).map((op, idx) => {
                         const expired = op.vencimiento && new Date(op.vencimiento) < now;
                         return (
-                          <tr key={idx} className="hover:bg-gray-50/50">
+                          <tr key={idx} className="hover:bg-gray-50/50 cursor-pointer" onDoubleClick={() => setDetailRecord(op as unknown as Record<string, unknown>)} title="Doble clic para ver/editar detalle">
                             <td className="py-2 pr-3 font-medium text-gray-900 text-xs max-w-[180px] truncate" title={op.operacion}>{op.operacion || '—'}</td>
                             <td className="py-2 pr-3 text-gray-600 text-xs">{op.compania || '—'}</td>
                             <td className="py-2 pr-3 text-gray-600 text-xs">{op.banco || '—'}</td>
                             <td className="py-2 pr-3"><Badge variant={op.tipo === 'Largo Plazo' ? 'default' : op.tipo === 'Capital Trabajo' ? 'warning' : 'info'}>{op.tipo || '—'}</Badge></td>
-                            <td className="py-2 pr-3 text-right font-semibold tabular-nums text-xs">{formatCurrency(Number(op.saldo_original) || 0)}</td>
-                            <td className="py-2 pr-3 text-right tabular-nums text-xs">{formatCurrency(Number(op.cuota) || 0)}</td>
+                            <td className="py-2 pr-3 text-right font-semibold tabular-nums text-xs">{formatCurrency(Number(op.saldo_original) || 0, normalizeCurrency(op.moneda))}</td>
+                            <td className="py-2 pr-3 text-right tabular-nums text-xs">{formatCurrency(Number(op.cuota) || 0, normalizeCurrency(op.moneda))}</td>
                             <td className={`py-2 pr-3 text-xs ${expired ? 'text-red-600 font-bold' : 'text-gray-600'}`}>{op.vencimiento ? formatDate(op.vencimiento) : '—'}{expired && <span className="ml-1 text-[8px] bg-red-100 text-red-700 px-1 rounded">VENCIDO</span>}</td>
-                            <td className="py-2 text-xs text-gray-500">{op.moneda || 'CRC'}</td>
+                            <td className="py-2 text-xs text-gray-500">{normalizeCurrency(op.moneda)}</td>
                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
-                  {uniqueOps.length > 25 && <p className="text-xs text-gray-400 mt-3 text-center">Mostrando 25 de {uniqueOps.length}.</p>}
+                  {uniqueOps.length > 25 && <p className="text-xs text-gray-400 mt-2 text-center">Mostrando 25 de {uniqueOps.length}.</p>}
+                  <p className="text-xs text-gray-400 mt-1 text-center italic">Doble clic en una fila para ver/editar detalle completo</p>
                 </div>
               </CardContent>
             </Card>
@@ -422,6 +459,19 @@ export function CreditDashboard() {
           </>
         )}
       </div>
+
+      {/* Record Detail Modal */}
+      <RecordDetailModal
+        open={!!detailRecord}
+        onClose={() => setDetailRecord(null)}
+        title="Detalle Operación de Crédito"
+        subtitle={detailRecord ? `${(detailRecord as Record<string, unknown>).operacion || ''} — ${(detailRecord as Record<string, unknown>).banco || ''}` : ''}
+        record={detailRecord}
+        fields={CREDIT_FIELDS}
+        schema="silver_finance"
+        table="flujo_semanal"
+        onSaved={fetchData}
+      />
     </Layout>
   );
 }

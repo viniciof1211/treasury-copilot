@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   TrendingUp, TrendingDown, AlertTriangle, Clock, ShieldCheck,
   Lightbulb, RefreshCw, BarChart3, Wallet, CreditCard, Landmark,
-  Target, History, Layers, Activity,
+  Target, History, Layers, Activity, DollarSign,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Layout } from '../components/layout/Layout';
@@ -10,18 +10,22 @@ import { KPICard } from '../components/dashboard/KPICard';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
-import {
-  formatCurrency, formatCompactCurrency, formatMonthYear,
-  semaphore, ARA_COLORS, formatShortDate,
-} from '../lib/utils';
+import { semaphore, ARA_COLORS, formatMonthYear, formatShortDate } from '../lib/utils';
 import {
   querySQL, type CxPItem, type FlujoItem, type Projection, type IngestRun,
   tooltipStyle,
 } from '../lib/queries';
 import {
+  useExchangeRate, toUSD, fmtCur, fmtCompact, normalizeCurrency,
+} from '../hooks/useExchangeRate';
+import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend, ComposedChart, Line, Area, ReferenceLine,
 } from 'recharts';
+
+// ── All formatting for this module is in USD ──────────────────────────────────
+const fmtUSD = (v: number) => fmtCur(v, 'USD');
+const fmtCompactUSD = (v: number) => fmtCompact(v, 'USD');
 
 export function Dashboard() {
   const [loading, setLoading] = useState(true);
@@ -30,6 +34,8 @@ export function Dashboard() {
   const [flujo, setFlujo] = useState<FlujoItem[]>([]);
   const [projection, setProjection] = useState<Projection[]>([]);
   const [ingestRuns, setIngestRuns] = useState<IngestRun[]>([]);
+
+  const { rate, loading: rateLoading, date: rateDate } = useExchangeRate();
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -48,12 +54,21 @@ export function Dashboard() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // ── Metrics ────────────────────────────────────────────────────────────────
-  const totalCxP = cxp.reduce((s, r) => s + (Number(r.monto_usd) || 0), 0);
-  const totalInflows = flujo.reduce((s, r) => s + (Number(r.cuota) || 0), 0);
-  const totalPrincipal = flujo.reduce((s, r) => s + (Number(r.principal) || 0), 0);
-  const totalIntereses = flujo.reduce((s, r) => s + (Number(r.intereses) || 0), 0);
-  const totalSaldo = flujo.reduce((s, r) => s + (Number(r.saldo_original) || 0), 0);
+  // ── Convert helpers (everything → USD) ────────────────────────────────────
+  /** CxP amounts: field is named monto_usd — treat as already USD */
+  const cxpUSD = (item: CxPItem) => Number(item.monto_usd) || 0;
+
+  /** Flujo amounts: use moneda field to decide conversion */
+  const flujoUSD = useCallback((item: FlujoItem, field: 'cuota' | 'principal' | 'intereses' | 'saldo_original' | 'capital' | 'capital_actualizado') => {
+    return toUSD(Number(item[field]) || 0, item.moneda, rate);
+  }, [rate]);
+
+  // ── Metrics (all USD) ──────────────────────────────────────────────────────
+  const totalCxP = cxp.reduce((s, r) => s + cxpUSD(r), 0);
+  const totalInflows = flujo.reduce((s, r) => s + flujoUSD(r, 'cuota'), 0);
+  const totalPrincipal = flujo.reduce((s, r) => s + flujoUSD(r, 'principal'), 0);
+  const totalIntereses = flujo.reduce((s, r) => s + flujoUSD(r, 'intereses'), 0);
+  const totalSaldo = flujo.reduce((s, r) => s + flujoUSD(r, 'saldo_original'), 0);
   const netCashflow = totalInflows - totalCxP;
   const ratio = totalCxP > 0 ? totalInflows / totalCxP : totalInflows > 0 ? 99 : 0;
   const runwayMonths = projection.filter(p => Number(p.projected_balance) > 0).length;
@@ -62,41 +77,62 @@ export function Dashboard() {
   const now = new Date();
   const overdueCxP = cxp.filter(r => r.vencimiento_fecha && new Date(r.vencimiento_fecha) < now);
 
-  // ── Monthly trends ─────────────────────────────────────────────────────────
+  // ── Monthly trends (USD) ──────────────────────────────────────────────────
   const monthlyTrends = useMemo(() => {
     const m: Record<string, { month: string; ingresos: number; egresos: number; neto: number }> = {};
-    flujo.forEach(r => { const k = (r.vencimiento || r.created_at || '').slice(0, 7); if (!k) return; if (!m[k]) m[k] = { month: k, ingresos: 0, egresos: 0, neto: 0 }; m[k].ingresos += Number(r.cuota) || 0; });
-    cxp.forEach(r => { const k = (r.vencimiento_fecha || r.created_at || '').slice(0, 7); if (!k) return; if (!m[k]) m[k] = { month: k, ingresos: 0, egresos: 0, neto: 0 }; m[k].egresos += Number(r.monto_usd) || 0; });
+    flujo.forEach(r => {
+      const k = (r.vencimiento || r.created_at || '').slice(0, 7);
+      if (!k) return;
+      if (!m[k]) m[k] = { month: k, ingresos: 0, egresos: 0, neto: 0 };
+      m[k].ingresos += flujoUSD(r, 'cuota');
+    });
+    cxp.forEach(r => {
+      const k = (r.vencimiento_fecha || r.created_at || '').slice(0, 7);
+      if (!k) return;
+      if (!m[k]) m[k] = { month: k, ingresos: 0, egresos: 0, neto: 0 };
+      m[k].egresos += cxpUSD(r);
+    });
     return Object.values(m).sort((a, b) => a.month.localeCompare(b.month)).map(x => ({ ...x, neto: x.ingresos - x.egresos, label: formatMonthYear(x.month + '-01') }));
-  }, [cxp, flujo]);
+  }, [cxp, flujo, flujoUSD]);
 
-  // Combined projection
+  // Combined projection (projection table amounts → treat as CRC, convert)
   const projChart = useMemo(() => {
     const all: { month: string; label: string; ingresos: number; egresos: number; balance: number }[] = [];
     let cum = 0;
     monthlyTrends.forEach(m => { cum += m.neto; all.push({ month: m.month, label: m.label, ingresos: m.ingresos, egresos: m.egresos, balance: cum }); });
-    projection.forEach(p => { const k = p.projection_month.slice(0, 7); if (all.some(a => a.month === k)) return; all.push({ month: k, label: formatMonthYear(p.projection_month), ingresos: Number(p.projected_inflows), egresos: Number(p.projected_outflows), balance: Number(p.projected_balance) }); });
+    projection.forEach(p => {
+      const k = p.projection_month.slice(0, 7);
+      if (all.some(a => a.month === k)) return;
+      // Projection amounts likely stored in CRC — convert
+      all.push({
+        month: k,
+        label: formatMonthYear(p.projection_month),
+        ingresos: toUSD(Number(p.projected_inflows), 'CRC', rate),
+        egresos: toUSD(Number(p.projected_outflows), 'CRC', rate),
+        balance: toUSD(Number(p.projected_balance), 'CRC', rate),
+      });
+    });
     return all.sort((a, b) => a.month.localeCompare(b.month));
-  }, [monthlyTrends, projection]);
+  }, [monthlyTrends, projection, rate]);
 
-  // BU breakdown
+  // BU breakdown (USD)
   const buData = useMemo(() => {
     const m: Record<string, { bu: string; ingresos: number; egresos: number }> = {};
-    flujo.forEach(r => { const b = r.compania || 'Sin BU'; if (!m[b]) m[b] = { bu: b, ingresos: 0, egresos: 0 }; m[b].ingresos += Number(r.cuota) || 0; });
-    cxp.forEach(r => { const b = r.empresa || 'Sin BU'; if (!m[b]) m[b] = { bu: b, ingresos: 0, egresos: 0 }; m[b].egresos += Number(r.monto_usd) || 0; });
+    flujo.forEach(r => { const b = r.compania || 'Sin BU'; if (!m[b]) m[b] = { bu: b, ingresos: 0, egresos: 0 }; m[b].ingresos += flujoUSD(r, 'cuota'); });
+    cxp.forEach(r => { const b = r.empresa || 'Sin BU'; if (!m[b]) m[b] = { bu: b, ingresos: 0, egresos: 0 }; m[b].egresos += cxpUSD(r); });
     return Object.values(m).map(v => ({ ...v, neto: v.ingresos - v.egresos })).sort((a, b) => b.neto - a.neto);
-  }, [cxp, flujo]);
+  }, [cxp, flujo, flujoUSD]);
 
-  // ── Insights ───────────────────────────────────────────────────────────────
+  // ── Insights (USD) ─────────────────────────────────────────────────────────
   const insights: { type: 'insight' | 'risk' | 'action'; text: string }[] = [];
   if (totalCxP > 0 && totalInflows > 0) {
-    if (ratio >= 1.5) insights.push({ type: 'insight', text: `Liquidez saludable: ingresos (${formatCompactCurrency(totalInflows)}) cubren ${ratio.toFixed(1)}x las CxP (${formatCompactCurrency(totalCxP)}).` });
+    if (ratio >= 1.5) insights.push({ type: 'insight', text: `Liquidez saludable: ingresos (${fmtCompactUSD(totalInflows)}) cubren ${ratio.toFixed(1)}x las CxP (${fmtCompactUSD(totalCxP)}).` });
     else if (ratio >= 1) insights.push({ type: 'risk', text: `Cobertura ajustada (${ratio.toFixed(1)}x). Margen limitado.` });
-    else insights.push({ type: 'risk', text: `Alerta: CxP > Ingresos. Gap: ${formatCompactCurrency(totalCxP - totalInflows)}.` });
+    else insights.push({ type: 'risk', text: `Alerta: CxP > Ingresos. Gap: ${fmtCompactUSD(totalCxP - totalInflows)}.` });
   }
-  if (overdueCxP.length > 0) { const amt = overdueCxP.reduce((s, r) => s + (Number(r.monto_usd) || 0), 0); insights.push({ type: 'action', text: `${overdueCxP.length} CxP vencidas (${formatCompactCurrency(amt)}). Gestionar cobro/priorización.` }); }
-  if (totalIntereses > 0) insights.push({ type: 'insight', text: `Carga financiera: ${formatCompactCurrency(totalIntereses)} intereses + ${formatCompactCurrency(totalPrincipal)} principal.` });
-  if (uniqueOps > 0) insights.push({ type: 'insight', text: `${uniqueOps} líneas de crédito en ${uniqueBanks} bancos. Saldo total: ${formatCompactCurrency(totalSaldo)}.` });
+  if (overdueCxP.length > 0) { const amt = overdueCxP.reduce((s, r) => s + cxpUSD(r), 0); insights.push({ type: 'action', text: `${overdueCxP.length} CxP vencidas (${fmtCompactUSD(amt)}). Gestionar cobro/priorización.` }); }
+  if (totalIntereses > 0) insights.push({ type: 'insight', text: `Carga financiera: ${fmtCompactUSD(totalIntereses)} intereses + ${fmtCompactUSD(totalPrincipal)} principal.` });
+  if (uniqueOps > 0) insights.push({ type: 'insight', text: `${uniqueOps} líneas de crédito en ${uniqueBanks} bancos. Saldo total: ${fmtCompactUSD(totalSaldo)}.` });
   if (ingestRuns.length > 0) insights.push({ type: 'insight', text: `${ingestRuns.length} ingestas. Última: ${ingestRuns[0]?.source_file?.split('_').pop() || 'N/A'}.` });
   if (cxp.length === 0 && flujo.length === 0) insights.push({ type: 'action', text: 'Sin datos. Sube archivos en "Fuentes de Datos" para activar el dashboard.' });
 
@@ -109,9 +145,24 @@ export function Dashboard() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Panel Ejecutivo de Tesorería</h1>
-            <p className="text-gray-500 mt-1 text-sm">Resumen consolidado — Cashflow, CxP, Crédito, Proyección (₡ CRC) &middot; ARA Group</p>
+            <p className="text-gray-500 mt-1 text-sm">
+              Resumen consolidado — Cashflow, CxP, Crédito, Proyección <strong>($ USD — Dolarizado)</strong> &middot; ARA Group
+            </p>
           </div>
           <div className="flex items-center gap-3">
+            {/* Exchange rate badge */}
+            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 border border-blue-200 rounded-lg text-xs">
+              <DollarSign className="w-3.5 h-3.5 text-blue-600" />
+              <span className="font-medium text-blue-700">
+                {rateLoading ? '...' : `₡${rate.toFixed(2)} / $1`}
+              </span>
+              {rateDate && rateDate !== 'fallback' && (
+                <span className="text-blue-400 text-[9px]">BCCR {formatShortDate(rateDate)}</span>
+              )}
+              {rateDate === 'fallback' && (
+                <span className="text-amber-500 text-[9px]">est.</span>
+              )}
+            </div>
             <span className="text-[10px] text-gray-400 hidden lg:block">{lastRefresh.toLocaleTimeString('es-CR')}</span>
             <button onClick={fetchData} disabled={loading}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-[#1A4A28] bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors disabled:opacity-50">
@@ -124,11 +175,11 @@ export function Dashboard() {
           <div className="flex flex-col items-center justify-center py-24 text-gray-400"><LoadingSpinner size="lg" /><p className="mt-4 text-sm">Cargando datos de tesorería...</p></div>
         ) : (
           <>
-            {/* KPIs */}
+            {/* KPIs — all USD */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-              <KPICard title="Total CxP" value={totalCxP} icon={CreditCard} semaphore={semaphore(totalCxP, 100000, 500000, true)} subtitle={`${cxp.length} facturas`} />
-              <KPICard title="Ingresos Operativos" value={totalInflows} icon={Wallet} semaphore={totalInflows > 0 ? 'green' : 'red'} subtitle={`${flujo.length} operaciones`} />
-              <KPICard title="Cashflow Neto" value={netCashflow} icon={netCashflow >= 0 ? TrendingUp : TrendingDown} semaphore={semaphore(netCashflow, 0, -50000)} subtitle={netCashflow >= 0 ? 'Superávit' : 'Déficit'} />
+              <KPICard title="Total CxP" value={totalCxP} icon={CreditCard} currency="USD" semaphore={semaphore(totalCxP, 100000, 500000, true)} subtitle={`${cxp.length} facturas`} />
+              <KPICard title="Ingresos Operativos" value={totalInflows} icon={Wallet} currency="USD" semaphore={totalInflows > 0 ? 'green' : 'red'} subtitle={`${flujo.length} operaciones`} />
+              <KPICard title="Cashflow Neto" value={netCashflow} icon={netCashflow >= 0 ? TrendingUp : TrendingDown} currency="USD" semaphore={semaphore(netCashflow, 0, -50000)} subtitle={netCashflow >= 0 ? 'Superávit' : 'Déficit'} />
               <KPICard title="Ratio Cobertura" value={ratio} icon={ShieldCheck} format="number" semaphore={semaphore(ratio, 1.5, 1.0)} subtitle="Ingresos / CxP" />
               <KPICard title="Runway" value={runwayMonths} icon={Clock} format="months" semaphore={semaphore(runwayMonths, 6, 3)} subtitle="Balance positivo" />
             </div>
@@ -176,9 +227,9 @@ export function Dashboard() {
               </Link>
             </div>
 
-            {/* Main chart: cashflow + projection */}
+            {/* Main chart: cashflow + projection (USD) */}
             <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Target className="w-4 h-4 text-[#1A4A28]" />Flujo de Caja: Histórico + Proyección 12M</CardTitle></CardHeader>
+              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Target className="w-4 h-4 text-[#1A4A28]" />Flujo de Caja: Histórico + Proyección 12M ($)</CardTitle></CardHeader>
               <CardContent>
                 {projChart.length > 0 ? (
                   <ResponsiveContainer width="100%" height={340}>
@@ -186,13 +237,13 @@ export function Dashboard() {
                       <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={ARA_COLORS.primary} stopOpacity={0.15} /><stop offset="95%" stopColor={ARA_COLORS.primary} stopOpacity={0} /></linearGradient></defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                       <XAxis dataKey="label" stroke="#9ca3af" fontSize={10} />
-                      <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
-                      <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
+                      <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => fmtCompactUSD(v)} />
+                      <Tooltip formatter={(v: number) => fmtUSD(v)} contentStyle={tooltipStyle} />
                       <Legend wrapperStyle={{ fontSize: 11 }} />
-                      <ReferenceLine y={0} stroke={ARA_COLORS.red} strokeDasharray="4 4" label={{ value: 'Equilibrio ₡0', fill: ARA_COLORS.red, fontSize: 10 }} />
-                      <Bar dataKey="ingresos" fill={ARA_COLORS.primary} name="Ingresos ₡" radius={[2, 2, 0, 0]} opacity={0.7} />
-                      <Bar dataKey="egresos" fill={ARA_COLORS.red} name="Egresos ₡" radius={[2, 2, 0, 0]} opacity={0.5} />
-                      <Area type="monotone" dataKey="balance" stroke={ARA_COLORS.gold} strokeWidth={2.5} fill="url(#bg)" name="Balance Acum. ₡" />
+                      <ReferenceLine y={0} stroke={ARA_COLORS.red} strokeDasharray="4 4" label={{ value: '$0', fill: ARA_COLORS.red, fontSize: 10 }} />
+                      <Bar dataKey="ingresos" fill={ARA_COLORS.primary} name="Ingresos $" radius={[2, 2, 0, 0]} opacity={0.7} />
+                      <Bar dataKey="egresos" fill={ARA_COLORS.red} name="Egresos $" radius={[2, 2, 0, 0]} opacity={0.5} />
+                      <Area type="monotone" dataKey="balance" stroke={ARA_COLORS.gold} strokeWidth={2.5} fill="url(#bg)" name="Balance Acum. $" />
                     </ComposedChart>
                   </ResponsiveContainer>
                 ) : monthlyTrends.length > 0 ? (
@@ -200,34 +251,34 @@ export function Dashboard() {
                     <ComposedChart data={monthlyTrends}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                       <XAxis dataKey="label" stroke="#9ca3af" fontSize={10} />
-                      <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
-                      <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
+                      <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => fmtCompactUSD(v)} />
+                      <Tooltip formatter={(v: number) => fmtUSD(v)} contentStyle={tooltipStyle} />
                       <Legend wrapperStyle={{ fontSize: 11 }} />
                       <ReferenceLine y={0} stroke={ARA_COLORS.red} strokeDasharray="4 4" />
-                      <Bar dataKey="ingresos" fill={ARA_COLORS.primary} name="Ingresos ₡" radius={[2, 2, 0, 0]} />
-                      <Bar dataKey="egresos" fill={ARA_COLORS.red} name="Egresos ₡" radius={[2, 2, 0, 0]} opacity={0.6} />
-                      <Line type="monotone" dataKey="neto" stroke={ARA_COLORS.gold} strokeWidth={2} name="Neto ₡" dot={{ r: 3 }} />
+                      <Bar dataKey="ingresos" fill={ARA_COLORS.primary} name="Ingresos $" radius={[2, 2, 0, 0]} />
+                      <Bar dataKey="egresos" fill={ARA_COLORS.red} name="Egresos $" radius={[2, 2, 0, 0]} opacity={0.6} />
+                      <Line type="monotone" dataKey="neto" stroke={ARA_COLORS.gold} strokeWidth={2} name="Neto $" dot={{ r: 3 }} />
                     </ComposedChart>
                   </ResponsiveContainer>
                 ) : <EmptyState text="Ingesta datos o ejecuta recalc_projection en AI Chat." />}
               </CardContent>
             </Card>
 
-            {/* BU summary */}
+            {/* BU summary (USD) */}
             {buData.length > 0 && (
               <Card>
-                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Layers className="w-4 h-4 text-[#1A4A28]" />Cashflow por Unidad de Negocio (₡)</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Layers className="w-4 h-4 text-[#1A4A28]" />Cashflow por Unidad de Negocio ($)</CardTitle></CardHeader>
                 <CardContent>
                   <ResponsiveContainer width="100%" height={260}>
                     <BarChart data={buData.map(b => ({ ...b, bu: b.bu.length > 18 ? b.bu.slice(0, 15) + '...' : b.bu }))}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                       <XAxis dataKey="bu" stroke="#9ca3af" fontSize={9} />
-                      <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
-                      <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
+                      <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => fmtCompactUSD(v)} />
+                      <Tooltip formatter={(v: number) => fmtUSD(v)} contentStyle={tooltipStyle} />
                       <Legend wrapperStyle={{ fontSize: 10 }} />
                       <ReferenceLine y={0} stroke={ARA_COLORS.red} strokeDasharray="4 4" />
-                      <Bar dataKey="ingresos" fill={ARA_COLORS.primary} name="Ingresos ₡" radius={[3, 3, 0, 0]} />
-                      <Bar dataKey="egresos" fill={ARA_COLORS.red} name="Egresos ₡" radius={[3, 3, 0, 0]} opacity={0.6} />
+                      <Bar dataKey="ingresos" fill={ARA_COLORS.primary} name="Ingresos $" radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="egresos" fill={ARA_COLORS.red} name="Egresos $" radius={[3, 3, 0, 0]} opacity={0.6} />
                     </BarChart>
                   </ResponsiveContainer>
                 </CardContent>
@@ -261,7 +312,9 @@ export function Dashboard() {
             {/* Footer */}
             <div className="flex items-center justify-between text-xs text-gray-400 border-t border-gray-100 pt-4">
               <div className="flex items-center gap-4 flex-wrap">
-                <span>{cxp.length} CxP</span><span>{flujo.length} operaciones</span><span>{uniqueOps} líneas crédito</span><span>{projection.length} meses proy.</span><span>Divisa: ₡ CRC</span>
+                <span>{cxp.length} CxP</span><span>{flujo.length} operaciones</span><span>{uniqueOps} líneas crédito</span><span>{projection.length} meses proy.</span>
+                <span className="font-medium text-blue-500">Divisa: $ USD (dolarizado)</span>
+                <span>TC: ₡{rate.toFixed(2)}/$1</span>
               </div>
               <span>CVE Treasury Copilot — ARA Group</span>
             </div>

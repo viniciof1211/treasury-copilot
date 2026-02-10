@@ -2,21 +2,56 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   TrendingUp, TrendingDown, AlertTriangle, Lightbulb, RefreshCw, BarChart3,
   Wallet, CreditCard, Building2, CalendarDays, Target, ShieldCheck, Clock,
-  Filter, CheckCircle2, XCircle, AlertOctagon,
+  Filter, CheckCircle2, XCircle, AlertOctagon, Banknote,
 } from 'lucide-react';
 import { Layout } from '../components/layout/Layout';
 import { KPICard } from '../components/dashboard/KPICard';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
+import { RecordDetailModal, type FieldDef } from '../components/ui/RecordDetailModal';
 import {
   formatCurrency, formatCompactCurrency, formatMonthYear, formatShortDate,
   semaphore, ARA_COLORS, getPriorityLabel, formatDate,
 } from '../lib/utils';
+import { normalizeCurrency } from '../hooks/useExchangeRate';
 import {
   querySQL, type CxPItem, type FlujoItem, type Projection,
   type TimePeriod, getDateCutoff, PERIOD_LABELS, tooltipStyle,
 } from '../lib/queries';
+
+const CXP_FIELDS: FieldDef[] = [
+  { key: 'proveedor', label: 'Proveedor', type: 'text', group: 'Información General' },
+  { key: 'empresa', label: 'Empresa / BU', type: 'text' },
+  { key: 'negocio', label: 'Negocio', type: 'text' },
+  { key: 'responsable', label: 'Responsable', type: 'text' },
+  { key: 'monto_usd', label: 'Monto', type: 'currency', group: 'Financiero', highlight: true },
+  { key: 'vencimiento_fecha', label: 'Fecha de Vencimiento', type: 'date' },
+  { key: 'prioridad', label: 'Prioridad', type: 'select', options: ['P1 - Crítico', 'P2 - Importante', 'P3 - Normal', 'P4 - Diferible'] },
+  { key: 'clasificacion', label: 'Clasificación', type: 'text' },
+  { key: 'detalle', label: 'Detalle / Notas', type: 'text', group: 'Detalle', highlight: true },
+  { key: 'ingest_run_id', label: 'Run de Ingesta', type: 'readonly', group: 'Metadata' },
+  { key: 'created_at', label: 'Fecha de Creación', type: 'readonly' },
+];
+
+const FLUJO_FIELDS: FieldDef[] = [
+  { key: 'operacion', label: 'Operación', type: 'text', group: 'Identificación' },
+  { key: 'compania', label: 'Compañía / BU', type: 'text' },
+  { key: 'banco', label: 'Banco', type: 'text' },
+  { key: 'tipo', label: 'Tipo de Crédito', type: 'select', options: ['Largo Plazo', 'Capital Trabajo', 'Leasing', 'Línea Revolving', 'Tarjeta'] },
+  { key: 'moneda', label: 'Moneda', type: 'select', options: ['CRC', 'USD'], group: 'Financiero' },
+  { key: 'cuota', label: 'Cuota (Ingreso)', type: 'currency', highlight: true },
+  { key: 'principal', label: 'Principal', type: 'currency' },
+  { key: 'intereses', label: 'Intereses', type: 'currency' },
+  { key: 'saldo_original', label: 'Saldo Original', type: 'currency' },
+  { key: 'capital', label: 'Capital', type: 'currency' },
+  { key: 'capital_actualizado', label: 'Capital Actualizado', type: 'currency' },
+  { key: 'vencimiento', label: 'Vencimiento', type: 'date', group: 'Plazos' },
+  { key: 'semana_inicio', label: 'Semana Inicio', type: 'date' },
+  { key: 'semana_fin', label: 'Semana Fin', type: 'date' },
+  { key: 'ingest_run_id', label: 'Run de Ingesta', type: 'readonly', group: 'Metadata' },
+  { key: 'created_at', label: 'Fecha de Creación', type: 'readonly' },
+];
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend, ComposedChart, Line, ReferenceLine, PieChart, Pie, Cell,
@@ -28,6 +63,8 @@ export function CashflowDashboard() {
   const [flujoAll, setFlujoAll] = useState<FlujoItem[]>([]);
   const [projection, setProjection] = useState<Projection[]>([]);
   const [period, setPeriod] = useState<TimePeriod>('all');
+  const [detailRecord, setDetailRecord] = useState<Record<string, unknown> | null>(null);
+  const [detailType, setDetailType] = useState<'cxp' | 'flujo'>('cxp');
   const [buFilter, setBuFilter] = useState<string>('all');
   const [lastRefresh, setLastRefresh] = useState(new Date());
 
@@ -223,7 +260,7 @@ export function CashflowDashboard() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Cashflow — Vista Detallada</h1>
-            <p className="text-gray-500 mt-1 text-sm">Real vs Proyectado · Aging · CxP · KPIs de Proceso · Filtro por BU (₡ CRC)</p>
+            <p className="text-gray-500 mt-1 text-sm">Real vs Proyectado · Aging · CxP · KPIs de Proceso · Filtro por BU ($ USD)</p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
             {/* BU Filter */}
@@ -268,7 +305,7 @@ export function CashflowDashboard() {
 
             {/* Real vs Projected */}
             <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Target className="w-4 h-4 text-[#1A4A28]" />Cashflow Real vs Proyectado (₡){buFilter !== 'all' && <Badge variant="info">{buFilter}</Badge>}</CardTitle></CardHeader>
+              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Target className="w-4 h-4 text-[#1A4A28]" />Cashflow Real vs Proyectado ($){buFilter !== 'all' && <Badge variant="info">{buFilter}</Badge>}</CardTitle></CardHeader>
               <CardContent>
                 {combinedChart.length > 0 ? (
                   <ResponsiveContainer width="100%" height={360}>
@@ -281,11 +318,11 @@ export function CashflowDashboard() {
                       <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
                       <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
                       <Legend wrapperStyle={{ fontSize: 10 }} />
-                      <ReferenceLine y={0} stroke={ARA_COLORS.red} strokeDasharray="4 4" label={{ value: '₡0', fill: ARA_COLORS.red, fontSize: 10 }} />
-                      <Bar dataKey="real_in" fill={ARA_COLORS.primary} name="Ingresos Real ₡" radius={[2, 2, 0, 0]} opacity={0.7} />
-                      <Bar dataKey="real_out" fill={ARA_COLORS.red} name="Egresos Real ₡" radius={[2, 2, 0, 0]} opacity={0.5} />
-                      <Line type="monotone" dataKey="proj_bal" stroke={ARA_COLORS.gold} strokeWidth={2} strokeDasharray="6 3" name="Balance Proyectado ₡" dot={{ r: 3 }} />
-                      <Area type="monotone" dataKey="real_net" stroke={ARA_COLORS.blue} strokeWidth={1.5} fill="url(#cfBal)" name="Neto Real ₡" />
+                      <ReferenceLine y={0} stroke={ARA_COLORS.red} strokeDasharray="4 4" label={{ value: '$0', fill: ARA_COLORS.red, fontSize: 10 }} />
+                      <Bar dataKey="real_in" fill={ARA_COLORS.primary} name="Ingresos Real $" radius={[2, 2, 0, 0]} opacity={0.7} />
+                      <Bar dataKey="real_out" fill={ARA_COLORS.red} name="Egresos Real $" radius={[2, 2, 0, 0]} opacity={0.5} />
+                      <Line type="monotone" dataKey="proj_bal" stroke={ARA_COLORS.gold} strokeWidth={2} strokeDasharray="6 3" name="Balance Proyectado $" dot={{ r: 3 }} />
+                      <Area type="monotone" dataKey="real_net" stroke={ARA_COLORS.blue} strokeWidth={1.5} fill="url(#cfBal)" name="Neto Real $" />
                     </ComposedChart>
                   </ResponsiveContainer>
                 ) : <EmptyState text="Sin datos de cashflow." />}
@@ -295,7 +332,7 @@ export function CashflowDashboard() {
             {/* Aging + Priority */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <Card>
-                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Clock className="w-4 h-4 text-[#1A4A28]" />KPI-05: Aging de CxP (₡) — Salud de Cartera</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Clock className="w-4 h-4 text-[#1A4A28]" />KPI-05: Aging de CxP ($) — Salud de Cartera</CardTitle></CardHeader>
                 <CardContent>
                   {agingBuckets.some(b => b.monto > 0) ? (
                     <>
@@ -305,7 +342,7 @@ export function CashflowDashboard() {
                           <XAxis dataKey="label" stroke="#9ca3af" fontSize={11} />
                           <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
                           <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
-                          <Bar dataKey="monto" name="Monto ₡" radius={[4, 4, 0, 0]}>
+                          <Bar dataKey="monto" name="Monto $" radius={[4, 4, 0, 0]}>
                             {agingBuckets.map((b, i) => <Cell key={i} fill={i === 0 ? ARA_COLORS.primary : i === 1 ? ARA_COLORS.gold : i === 2 ? ARA_COLORS.orange : ARA_COLORS.red} />)}
                           </Bar>
                         </BarChart>
@@ -325,7 +362,7 @@ export function CashflowDashboard() {
               </Card>
 
               <Card>
-                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><CreditCard className="w-4 h-4 text-red-600" />CxP Próximas 4 Semanas por Prioridad (₡)</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><CreditCard className="w-4 h-4 text-red-600" />CxP Próximas 4 Semanas por Prioridad ($)</CardTitle></CardHeader>
                 <CardContent>
                   {weekBuckets.some(w => w.p1 + w.p2 + w.p3 + w.other > 0) ? (
                     <ResponsiveContainer width="100%" height={280}>
@@ -349,7 +386,7 @@ export function CashflowDashboard() {
             {/* BU Breakdown + Clasificación */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <Card className="lg:col-span-2">
-                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Building2 className="w-4 h-4 text-[#1A4A28]" />Cashflow Neto por Unidad de Negocio (₡)</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Building2 className="w-4 h-4 text-[#1A4A28]" />Cashflow Neto por Unidad de Negocio ($)</CardTitle></CardHeader>
                 <CardContent>
                   {buBreakdown.length > 0 ? (
                     <ResponsiveContainer width="100%" height={280}>
@@ -360,8 +397,8 @@ export function CashflowDashboard() {
                         <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
                         <Legend wrapperStyle={{ fontSize: 10 }} />
                         <ReferenceLine y={0} stroke={ARA_COLORS.red} strokeDasharray="4 4" />
-                        <Bar dataKey="ingresos" fill={ARA_COLORS.primary} name="Ingresos ₡" radius={[3, 3, 0, 0]} />
-                        <Bar dataKey="egresos" fill={ARA_COLORS.red} name="Egresos ₡" radius={[3, 3, 0, 0]} opacity={0.6} />
+                        <Bar dataKey="ingresos" fill={ARA_COLORS.primary} name="Ingresos $" radius={[3, 3, 0, 0]} />
+                        <Bar dataKey="egresos" fill={ARA_COLORS.red} name="Egresos $" radius={[3, 3, 0, 0]} opacity={0.6} />
                       </BarChart>
                     </ResponsiveContainer>
                   ) : <EmptyState text="Sin datos por BU." />}
@@ -389,7 +426,7 @@ export function CashflowDashboard() {
             {/* Top Proveedores + Priority summary */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <Card>
-                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Building2 className="w-4 h-4 text-[#1A4A28]" />Top Proveedores CxP — Pareto (₡)</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Building2 className="w-4 h-4 text-[#1A4A28]" />Top Proveedores CxP — Pareto ($)</CardTitle></CardHeader>
                 <CardContent>
                   {topProv.length > 0 ? (
                     <ResponsiveContainer width="100%" height={300}>
@@ -398,7 +435,7 @@ export function CashflowDashboard() {
                         <XAxis type="number" stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
                         <YAxis type="category" dataKey="name" stroke="#9ca3af" fontSize={9} width={130} />
                         <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
-                        <Bar dataKey="total" fill={ARA_COLORS.primary} name="Monto ₡" radius={[0, 4, 4, 0]} barSize={16} />
+                        <Bar dataKey="total" fill={ARA_COLORS.primary} name="Monto $" radius={[0, 4, 4, 0]} barSize={16} />
                       </BarChart>
                     </ResponsiveContainer>
                   ) : <EmptyState text="Sin proveedores." />}
@@ -406,7 +443,7 @@ export function CashflowDashboard() {
               </Card>
 
               <Card>
-                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><AlertTriangle className="w-4 h-4 text-orange-500" />Distribución por Prioridad de Pago (₡)</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><AlertTriangle className="w-4 h-4 text-orange-500" />Distribución por Prioridad de Pago ($)</CardTitle></CardHeader>
                 <CardContent>
                   {cxpByPriorityDetail.length > 0 ? (
                     <>
@@ -416,7 +453,7 @@ export function CashflowDashboard() {
                           <XAxis dataKey="label" stroke="#9ca3af" fontSize={10} />
                           <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
                           <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
-                          <Bar dataKey="monto" name="Monto ₡" radius={[4, 4, 0, 0]}>
+                          <Bar dataKey="monto" name="Monto $" radius={[4, 4, 0, 0]}>
                             {cxpByPriorityDetail.map((_, i) => <Cell key={i} fill={[ARA_COLORS.red, ARA_COLORS.orange, ARA_COLORS.gold, ARA_COLORS.gray][i] || ARA_COLORS.gray} />)}
                           </Bar>
                         </BarChart>
@@ -437,20 +474,20 @@ export function CashflowDashboard() {
 
             {/* CxP detail table */}
             <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><AlertTriangle className="w-4 h-4 text-orange-500" />Detalle CxP — Pagos Prioritarios (₡){buFilter !== 'all' && <Badge variant="info">{buFilter}</Badge>}</CardTitle></CardHeader>
+              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><AlertTriangle className="w-4 h-4 text-orange-500" />Detalle CxP — Pagos Prioritarios ($){buFilter !== 'all' && <Badge variant="info">{buFilter}</Badge>}</CardTitle></CardHeader>
               <CardContent>
                 {cxp.length > 0 ? (
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead><tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wider">
-                        <th className="pb-2 pr-3">Proveedor</th><th className="pb-2 pr-3">Empresa</th><th className="pb-2 pr-3 text-right">Monto ₡</th>
+                        <th className="pb-2 pr-3">Proveedor</th><th className="pb-2 pr-3">Empresa</th><th className="pb-2 pr-3 text-right">Monto $</th>
                         <th className="pb-2 pr-3">Vencimiento</th><th className="pb-2 pr-3">Prioridad</th><th className="pb-2 pr-3">Clasificación</th><th className="pb-2">Negocio</th>
                       </tr></thead>
                       <tbody className="divide-y divide-gray-50">
                         {cxp.slice(0, 20).map((item, idx) => {
                           const isOverdue = new Date(item.vencimiento_fecha) < now;
                           return (
-                            <tr key={idx} className="hover:bg-gray-50/50">
+                            <tr key={idx} className="hover:bg-gray-50/50 cursor-pointer" onDoubleClick={() => { setDetailType('cxp'); setDetailRecord(item as unknown as Record<string, unknown>); }} title="Doble clic para ver/editar detalle">
                               <td className="py-2 pr-3 font-medium text-gray-900 max-w-[180px] truncate text-xs">{item.proveedor || '—'}</td>
                               <td className="py-2 pr-3 text-gray-600 text-xs">{item.empresa || '—'}</td>
                               <td className="py-2 pr-3 text-right font-semibold tabular-nums text-xs">{formatCurrency(Number(item.monto_usd) || 0)}</td>
@@ -466,9 +503,50 @@ export function CashflowDashboard() {
                         })}
                       </tbody>
                     </table>
-                    {cxp.length > 20 && <p className="text-xs text-gray-400 mt-3 text-center">Mostrando 20 de {cxp.length}. Usa AI Chat para consultas detalladas.</p>}
+                    {cxp.length > 20 && <p className="text-xs text-gray-400 mt-2 text-center">Mostrando 20 de {cxp.length}.</p>}
+                    <p className="text-xs text-gray-400 mt-1 text-center italic">Doble clic en una fila para ver/editar detalle completo</p>
                   </div>
                 ) : <EmptyState text="Sin CxP." />}
+              </CardContent>
+            </Card>
+
+            {/* Ingresos (Flujo) detail table */}
+            <Card>
+              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Banknote className="w-4 h-4 text-emerald-600" />Detalle de Ingresos — Cuotas y Operaciones{buFilter !== 'all' && <Badge variant="info">{buFilter}</Badge>}</CardTitle></CardHeader>
+              <CardContent>
+                {flujo.length > 0 ? (
+                  <div className="overflow-x-auto max-h-[480px] overflow-y-auto">
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-white z-10"><tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wider">
+                        <th className="pb-2 pr-3">Operación</th><th className="pb-2 pr-3">Compañía</th><th className="pb-2 pr-3">Banco</th>
+                        <th className="pb-2 pr-3">Tipo</th><th className="pb-2 pr-3 text-right">Cuota</th><th className="pb-2 pr-3 text-right">Principal</th>
+                        <th className="pb-2 pr-3 text-right">Intereses</th><th className="pb-2 pr-3">Vencimiento</th><th className="pb-2">Moneda</th>
+                      </tr></thead>
+                      <tbody className="divide-y divide-gray-50">
+                        {flujo.slice(0, 50).map((item, idx) => {
+                          const cuota = Number(item.cuota) || 0;
+                          const cur = normalizeCurrency(item.moneda);
+                          const isLarge = cuota >= (cur === 'CRC' ? 50000000 : 100000);
+                          return (
+                            <tr key={idx} className="hover:bg-emerald-50/40 cursor-pointer" onDoubleClick={() => { setDetailType('flujo'); setDetailRecord(item as unknown as Record<string, unknown>); }} title="Doble clic para ver/editar detalle">
+                              <td className="py-2 pr-3 font-medium text-gray-900 max-w-[200px] truncate text-xs" title={item.operacion || ''}>{item.operacion || '—'}</td>
+                              <td className="py-2 pr-3 text-gray-600 text-xs max-w-[140px] truncate" title={item.compania || ''}>{item.compania || '—'}</td>
+                              <td className="py-2 pr-3 text-gray-600 text-xs">{item.banco || '—'}</td>
+                              <td className="py-2 pr-3"><Badge variant={item.tipo === 'Largo Plazo' ? 'success' : item.tipo === 'Capital Trabajo' ? 'warning' : 'default'}>{item.tipo || '—'}</Badge></td>
+                              <td className={`py-2 pr-3 text-right font-semibold tabular-nums text-xs ${isLarge ? 'text-emerald-700' : ''}`}>{formatCurrency(cuota, cur)}</td>
+                              <td className="py-2 pr-3 text-right tabular-nums text-xs text-gray-600">{formatCurrency(Number(item.principal) || 0, cur)}</td>
+                              <td className="py-2 pr-3 text-right tabular-nums text-xs text-gray-500">{formatCurrency(Number(item.intereses) || 0, cur)}</td>
+                              <td className="py-2 pr-3 text-xs text-gray-600">{item.vencimiento ? formatShortDate(item.vencimiento) : '—'}</td>
+                              <td className="py-2 text-xs"><Badge variant={cur === 'USD' ? 'info' : 'default'}>{cur}</Badge></td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    {flujo.length > 50 && <p className="text-xs text-gray-400 mt-2 text-center">Mostrando 50 de {flujo.length} registros.</p>}
+                    <p className="text-xs text-gray-400 mt-1 text-center italic">Doble clic en una fila para ver/editar detalle completo</p>
+                  </div>
+                ) : <EmptyState text='Sin ingresos. Ingesta "Flujo Semanal" o "Control de Operaciones" en Fuentes de Datos.' />}
               </CardContent>
             </Card>
 
@@ -499,16 +577,35 @@ export function CashflowDashboard() {
             {/* Footer */}
             <div className="flex items-center justify-between text-xs text-gray-400 border-t border-gray-100 pt-4">
               <div className="flex items-center gap-4 flex-wrap">
-                <span>{cxp.length} CxP</span><span>{flujo.length} operaciones</span>
+                <span>{cxp.length} CxP</span><span>{flujo.length} ingresos/operaciones</span>
                 <span>{projection.length} meses proyección</span>
                 <span>BU: {buFilter === 'all' ? 'Todas' : buFilter}</span>
-                <span>Divisa: ₡ CRC</span>
+                <span>Divisa: $ USD</span>
               </div>
               <span>CVE Treasury Copilot — ARA Group</span>
             </div>
           </>
         )}
       </div>
+
+      {/* Record Detail Modal — CxP or Flujo */}
+      <RecordDetailModal
+        open={!!detailRecord}
+        onClose={() => setDetailRecord(null)}
+        title={detailType === 'cxp' ? 'Detalle Cuenta por Pagar' : 'Detalle Ingreso / Operación'}
+        subtitle={
+          detailRecord
+            ? detailType === 'cxp'
+              ? `${(detailRecord as Record<string, unknown>).proveedor || ''} — ${(detailRecord as Record<string, unknown>).empresa || ''}`
+              : `${(detailRecord as Record<string, unknown>).operacion || ''} — ${(detailRecord as Record<string, unknown>).banco || ''}`
+            : ''
+        }
+        record={detailRecord}
+        fields={detailType === 'cxp' ? CXP_FIELDS : FLUJO_FIELDS}
+        schema="silver_finance"
+        table={detailType === 'cxp' ? 'cxp_items' : 'flujo_semanal'}
+        onSaved={fetchData}
+      />
     </Layout>
   );
 }

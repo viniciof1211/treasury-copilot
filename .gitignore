@@ -21,3 +21,8 @@ dist-ssr
 *.sln
 *.sw?
 .env
+
+# Excel data files (too large for git — stored in Supabase Storage)
+doc/*.xlsx
+doc/*.xls
+~$*
