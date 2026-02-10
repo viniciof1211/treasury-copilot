@@ -4,19 +4,27 @@ export function cn(...inputs: ClassValue[]) {
   return clsx(inputs);
 }
 
-export function formatCurrency(amount: number, currency: string = 'CRC'): string {
-  return new Intl.NumberFormat('es-CR', {
+export function formatCurrency(amount: number, currency: string = 'USD'): string {
+  const cur = currency.toUpperCase();
+  const locale = cur === 'CRC' ? 'es-CR' : 'en-US';
+  return new Intl.NumberFormat(locale, {
     style: 'currency',
-    currency,
+    currency: cur === 'CRC' ? 'CRC' : cur === 'EUR' ? 'EUR' : 'USD',
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(amount);
 }
 
-export function formatCompactCurrency(amount: number): string {
-  if (Math.abs(amount) >= 1_000_000) return `₡${(amount / 1_000_000).toFixed(1)}M`;
-  if (Math.abs(amount) >= 1_000) return `₡${(amount / 1_000).toFixed(0)}K`;
-  return `₡${amount.toFixed(0)}`;
+/** Compact currency formatter. Defaults to USD ($) */
+export function formatCompactCurrency(amount: number, currency: string = 'USD'): string {
+  const cur = currency.toUpperCase();
+  const sym = cur === 'CRC' ? '₡' : cur === 'EUR' ? '€' : '$';
+  const abs = Math.abs(amount);
+  const sign = amount < 0 ? '-' : '';
+  if (abs >= 1_000_000_000) return `${sign}${sym}${(abs / 1_000_000_000).toFixed(1)}B`;
+  if (abs >= 1_000_000) return `${sign}${sym}${(abs / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `${sign}${sym}${(abs / 1_000).toFixed(0)}K`;
+  return `${sign}${sym}${abs.toFixed(0)}`;
 }
 
 export function formatDate(date: string | Date): string {

@@ -107,12 +107,12 @@ Reglas de uso de herramientas de búsqueda y tipo de cambio
 - Los desembolsos de créditos (Davivienda, BCR, Nacional, etc.) son parte fundamental del cashflow de ingreso; las cuotas de esos créditos son CxP. Usar web_search para tasas y condiciones actuales de bancos.
 - Cargas sociales para nóminas HR→Treasury: patronal ~26.5% (CCSS, INS, IMAS, FONABE, INA, Banco Popular) + obrero ~10.5%. Validar con web_search("cargas sociales patronales Costa Rica 2026") si el usuario pide cifras exactas.
 
-Divisa por Defecto: Colones Costarricenses (₡ CRC)
-- SIEMPRE presentar montos en colones (₡) como divisa principal. Usar el símbolo ₡ antes del monto.
-- Si los datos originales están en USD, convertir a CRC usando get_cr_indicators("tipo_cambio") para obtener el tipo de cambio oficial BCCR.
-- Si el usuario pide explícitamente USD, mostrar en ambas divisas: ₡X,XXX (≈ $Y,YYY USD al TC ₡Z.ZZ).
-- En tablas, usar columna "Monto ₡" en lugar de "Monto USD".
-- Formato: ₡1.234.567 (punto como separador de miles, como es estándar en Costa Rica).
+Divisa por Defecto: Dólares Estadounidenses ($ USD)
+- SIEMPRE presentar montos en dólares ($) como divisa principal por defecto. Usar el símbolo $ antes del monto.
+- Si los datos originales están en CRC, convertir a USD usando get_cr_indicators("tipo_cambio") para obtener el tipo de cambio oficial BCCR. USD = CRC / tipo_cambio_venta.
+- Si el dato tiene su propia moneda (ej. operación de crédito en CRC), mostrar en su moneda original con el símbolo correspondiente (₡ para CRC, $ para USD, € para EUR).
+- En tablas agregadas, usar columna "Monto $". En tablas de detalle por registro, usar la moneda del registro.
+- Formato USD: $1,234,567 (comma como separador de miles). Formato CRC: ₡1.234.567 (punto como separador).
 
 Seguridad / Cumplimiento
 - No exponer secretos, keys, tokens.
@@ -144,7 +144,7 @@ export function Chat() {
         <div className="mb-6">
           <h1 className="text-3xl font-bold text-gray-900">Agente de Tesorería AI</h1>
           <p className="text-gray-600 mt-1">
-            Consulta cashflow, CxP, CxC, proyecciones y análisis financiero en colones (₡)
+            Consulta cashflow, CxP, CxC, proyecciones y análisis financiero ($ USD)
           </p>
         </div>
 
@@ -153,7 +153,7 @@ export function Chat() {
           <CopilotChat
             instructions={CASHFLOW_AGENT_PROMPT}
             labels={{
-              title: 'CVE Treasury Copilot (₡)',
+              title: 'CVE Treasury Copilot ($)',
               initial: 'Consultar Cash-In, Cash-Out, Proyección 12M, CxP, CxC, tipo de cambio...',
             }}
             className="h-full"

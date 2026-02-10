@@ -9,6 +9,7 @@ import { KPICard } from '../components/dashboard/KPICard';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
+import { RecordDetailModal, type FieldDef } from '../components/ui/RecordDetailModal';
 import {
   formatCurrency, formatCompactCurrency, ARA_COLORS,
 } from '../lib/utils';
@@ -130,6 +131,53 @@ const FISCAL_GLOSSARY: { term: string; abbr: string; description: string; legal:
   { term: 'DUA', abbr: 'DUA', description: 'Documento Único Aduanero — declaración obligatoria ante el Servicio Nacional de Aduanas para toda importación/exportación.', legal: 'Art. 86 LGA, TICA (TI-Control Aduanero)', color: '#7C3AED' },
 ];
 
+const MRP_FIELDS: FieldDef[] = [
+  { key: 'codigo', label: 'Código / SKU', type: 'text', group: 'Identificación del Producto' },
+  { key: 'descripcion', label: 'Descripción', type: 'text', highlight: true },
+  { key: 'abc_class', label: 'Clasificación ABC', type: 'select', options: ['A', 'B', 'C'] },
+  { key: 'tipo_stock', label: 'Tipo Stock', type: 'select', options: ['MTS', 'MTO'] },
+  { key: 'familia', label: 'Familia', type: 'text' },
+  { key: 'subclasificacion', label: 'Subclasificación', type: 'text' },
+  { key: 'infaltable', label: 'Infaltable', type: 'select', options: ['Infaltable', ''] },
+  { key: 'descontinuado', label: 'Descontinuado', type: 'select', options: ['X', ''] },
+  { key: 'proveedor', label: 'Proveedor', type: 'text', group: 'Proveedor y Logística' },
+  { key: 'comprador', label: 'Comprador', type: 'text' },
+  { key: 'tipo_item', label: 'Tipo Ítem', type: 'select', options: ['Importado', 'Local', 'Sin Definir'] },
+  { key: 'origen', label: 'Origen', type: 'text' },
+  { key: 'lead_time_dias', label: 'Lead Time', type: 'number', suffix: 'días' },
+  { key: 'dificultad_logistica', label: 'Dificultad Logística', type: 'number', suffix: '/ 10' },
+  { key: 'compra_minima', label: 'Compra Mínima', type: 'number' },
+  { key: 'unidad_medida', label: 'Unidad de Medida', type: 'text' },
+  { key: 'consumo_promedio', label: 'Consumo Promedio Mensual', type: 'number', group: 'Consumo', highlight: true },
+  { key: 'consumo_diario', label: 'Consumo Diario', type: 'number' },
+  { key: 'desv_estandar', label: 'Desviación Estándar', type: 'number' },
+  { key: 'consumo_m1', label: 'Consumo Mes 1', type: 'number' },
+  { key: 'consumo_m2', label: 'Consumo Mes 2', type: 'number' },
+  { key: 'consumo_m3', label: 'Consumo Mes 3', type: 'number' },
+  { key: 'consumo_m4', label: 'Consumo Mes 4', type: 'number' },
+  { key: 'inventario', label: 'Inventario', type: 'number', group: 'Inventario' },
+  { key: 'reserva', label: 'Reserva', type: 'number' },
+  { key: 'inventario_disponible', label: 'Inventario Disponible', type: 'number', highlight: true },
+  { key: 'transito', label: 'En Tránsito', type: 'number' },
+  { key: 'inventario_total', label: 'Inventario Total', type: 'number' },
+  { key: 'dias_cobertura', label: 'Días de Cobertura', type: 'number', suffix: 'días' },
+  { key: 'minimo_inventario', label: 'Mínimo Inventario', type: 'number', group: 'Parámetros MRP' },
+  { key: 'dias_stock', label: 'Días de Stock', type: 'number', suffix: 'días' },
+  { key: 'stock_seguridad', label: 'Stock de Seguridad', type: 'number' },
+  { key: 'punto_reorden', label: 'Punto de Reorden', type: 'number' },
+  { key: 'max_inventario', label: 'Máximo Inventario', type: 'number' },
+  { key: 'costo_unitario', label: 'Costo Unitario', type: 'currency', suffix: 'USD', group: 'Costos' },
+  { key: 'costo_inventario', label: 'Costo Inventario', type: 'currency', suffix: 'USD' },
+  { key: 'costo_total_inventario', label: 'Costo Total Inventario', type: 'currency', suffix: 'USD', highlight: true },
+  { key: 'costo_stock_seguridad', label: 'Costo Stock Seguridad', type: 'currency', suffix: 'USD' },
+  { key: 'alerta_desabasto', label: 'Alerta de Desabasto', type: 'select', options: ['Alerta', ''], group: 'Alertas y Acciones' },
+  { key: 'hacer_pedido', label: 'Hacer Pedido', type: 'select', options: ['Si', 'No', ''] },
+  { key: 'cantidad_requerida', label: 'Cantidad Requerida', type: 'number', highlight: true },
+  { key: 'analisis_parametros', label: 'Análisis Parámetros', type: 'select', options: ['Bajo Parametro', 'Dentro parametro', 'Sobre parametro'] },
+  { key: 'ingest_run_id', label: 'Run de Ingesta', type: 'readonly', group: 'Metadata' },
+  { key: 'created_at', label: 'Fecha de Creación', type: 'readonly' },
+];
+
 export function ComprasDashboard() {
   const [loading, setLoading] = useState(true);
   const [mrpAll, setMrpAll] = useState<MRPItem[]>([]);
@@ -137,6 +185,7 @@ export function ComprasDashboard() {
   const [lastRefresh, setLastRefresh] = useState(new Date());
   const [provFilter, setProvFilter] = useState('all');
   const [abcFilter, setAbcFilter] = useState('all');
+  const [detailRecord, setDetailRecord] = useState<Record<string, unknown> | null>(null);
   // Valor Nacionalizado state
   const [showGlossary, setShowGlossary] = useState(false);
   const [cabysQuery, setCabysQuery] = useState('');
@@ -966,7 +1015,7 @@ export function ComprasDashboard() {
                   {topOrderItems.map((item, i) => {
                     const orderCost = (Number(item.cantidad_requerida) || 0) * (Number(item.costo_unitario) || 0);
                     return (
-                      <tr key={i} className="hover:bg-gray-50">
+                      <tr key={i} className="hover:bg-gray-50 cursor-pointer" onDoubleClick={() => setDetailRecord(item as unknown as Record<string, unknown>)} title="Doble clic para ver/editar detalle">
                         <td className="py-2 font-mono text-xs">{item.codigo}</td>
                         <td className="py-2 max-w-[200px] truncate" title={item.descripcion}>{item.descripcion}</td>
                         <td className="py-2">
@@ -1261,8 +1310,9 @@ export function ComprasDashboard() {
                     <tbody className="divide-y divide-gray-100">
                       {nacPaged.map((r, i) => {
                         const logTotal = r.agenteAduanal + r.almacenFiscal + r.handling + r.transporteInterno + r.flete + r.seguro;
+                        const origItem = data.find(d => d.codigo === r.codigo);
                         return (
-                          <tr key={i} className="hover:bg-gray-50">
+                          <tr key={i} className="hover:bg-gray-50 cursor-pointer" onDoubleClick={() => origItem && setDetailRecord(origItem as unknown as Record<string, unknown>)} title="Doble clic para ver/editar detalle del ítem MRP">
                             <td className="py-1.5 px-1 font-mono">{r.codigo}</td>
                             <td className="py-1.5 px-1 max-w-[160px] truncate" title={r.descripcion}>{r.descripcion}</td>
                             <td className="py-1.5 px-1">
@@ -1345,6 +1395,7 @@ export function ComprasDashboard() {
                     </div>
                   </div>
                 )}
+                <p className="text-xs text-gray-400 mt-2 text-center italic">Doble clic en una fila para ver/editar detalle completo del ítem MRP</p>
                 {/* Disclaimer */}
                 <div className="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-200 text-xs text-amber-800">
                   <p className="font-semibold flex items-center gap-1.5 mb-1">
@@ -1504,7 +1555,7 @@ export function ComprasDashboard() {
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {alertItems.map((item, i) => (
-                      <tr key={i} className="hover:bg-red-50/30">
+                      <tr key={i} className="hover:bg-red-50/30 cursor-pointer" onDoubleClick={() => setDetailRecord(item as unknown as Record<string, unknown>)} title="Doble clic para ver/editar detalle">
                         <td className="py-2 font-mono text-xs">{item.codigo}</td>
                         <td className="py-2 max-w-[200px] truncate" title={item.descripcion}>{item.descripcion}</td>
                         <td className="py-2 text-xs">{item.proveedor || '—'}</td>
@@ -1550,6 +1601,19 @@ export function ComprasDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Record Detail Modal */}
+      <RecordDetailModal
+        open={!!detailRecord}
+        onClose={() => setDetailRecord(null)}
+        title="Detalle Ítem MRP / Compras"
+        subtitle={detailRecord ? `${(detailRecord as Record<string, unknown>).codigo || ''} — ${(detailRecord as Record<string, unknown>).descripcion || ''}` : ''}
+        record={detailRecord}
+        fields={MRP_FIELDS}
+        schema="silver_finance"
+        table="mrp_master"
+        onSaved={fetchData}
+      />
     </Layout>
   );
 }
