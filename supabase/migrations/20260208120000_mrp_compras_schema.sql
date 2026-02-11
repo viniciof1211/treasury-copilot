@@ -79,13 +79,16 @@ CREATE TABLE IF NOT EXISTS silver_finance.mrp_master (
 );
 
 -- Indexes for common queries
-CREATE INDEX idx_mrp_master_codigo ON silver_finance.mrp_master(codigo);
-CREATE INDEX idx_mrp_master_proveedor ON silver_finance.mrp_master(proveedor);
-CREATE INDEX idx_mrp_master_abc ON silver_finance.mrp_master(abc_class);
-CREATE INDEX idx_mrp_master_alerta ON silver_finance.mrp_master(alerta_desabasto);
-CREATE INDEX idx_mrp_master_pedido ON silver_finance.mrp_master(hacer_pedido);
-CREATE INDEX idx_mrp_master_ingest ON silver_finance.mrp_master(ingest_run_id);
+CREATE INDEX IF NOT EXISTS idx_mrp_master_codigo ON silver_finance.mrp_master(codigo);
+CREATE INDEX IF NOT EXISTS idx_mrp_master_proveedor ON silver_finance.mrp_master(proveedor);
+CREATE INDEX IF NOT EXISTS idx_mrp_master_abc ON silver_finance.mrp_master(abc_class);
+CREATE INDEX IF NOT EXISTS idx_mrp_master_alerta ON silver_finance.mrp_master(alerta_desabasto);
+CREATE INDEX IF NOT EXISTS idx_mrp_master_pedido ON silver_finance.mrp_master(hacer_pedido);
+CREATE INDEX IF NOT EXISTS idx_mrp_master_ingest ON silver_finance.mrp_master(ingest_run_id);
 
 -- RLS
 ALTER TABLE silver_finance.mrp_master ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow all for treasury tools" ON silver_finance.mrp_master FOR ALL USING (true);
+DO $$ BEGIN
+  CREATE POLICY "Allow all for treasury tools" ON silver_finance.mrp_master FOR ALL USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;

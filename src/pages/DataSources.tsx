@@ -391,8 +391,13 @@ export function DataSources() {
           'Consumo', 'ABC', 'Costo', 'Stock',
         ].filter((k) => colIndex(header, [k]) >= 0).length;
 
+        const cxcScore = [
+          'Cliente', 'Factura', 'Monto', 'Vencimiento', 'Estado', 'Area',
+        ].filter((k) => colIndex(header, [k]) >= 0).length;
+
         let format = 'generic';
         if (mrpScore >= 5) format = 'mrp';
+        else if (cxcScore >= 3) format = 'cxc';
         else if (cxpScore >= 3) format = 'cxp';
         else if (flujoScore >= 3) format = 'flujo';
 
@@ -421,9 +426,10 @@ export function DataSources() {
         return;
       }
 
-      // ── Split MRP (direct browser insert) vs others (Edge Function) ───────
+      // ── Split direct-insert formats (MRP, CxC) vs Edge Function formats ──
       const mrpSheets = sheets.filter(s => s.format === 'mrp');
-      const nonMrpSheets = sheets.filter(s => s.format !== 'mrp');
+      const cxcSheets = sheets.filter(s => s.format === 'cxc');
+      const nonDirectSheets = sheets.filter(s => s.format !== 'mrp' && s.format !== 'cxc');
 
       let totalInserted = 0;
       const sheetsProcessed: string[] = [];
@@ -489,11 +495,69 @@ export function DataSources() {
         }
       }
 
-      // ── Non-MRP sheets: send to Edge Function in chunks too ───────────────
-      if (nonMrpSheets.length > 0) {
+      // ── CxC: Direct chunked inserts from browser ──────────────────────────
+      for (const cxcSheet of cxcSheets) {
+        const { name: sheetName, headers: header, rows: dataRows } = cxcSheet;
+        const CHUNK = 100;
+        const totalChunks = Math.ceil(dataRows.length / CHUNK);
+        let sheetInserted = 0;
+        let lastError: string | null = null;
+
+        setProgress({ current: 0, total: dataRows.length, stage: `Ingresando CxC: ${sheetName} (${dataRows.length.toLocaleString()} filas)...` });
+
+        const ci = (names: string[]) => colIndex(header, names);
+
+        for (let c = 0; c < totalChunks; c++) {
+          const slice = dataRows.slice(c * CHUNK, (c + 1) * CHUNK);
+          const mapped = slice.map((r: string[]) => ({
+            empresa:        r[ci(['Empresa', 'Compañía', 'BU'])] || '',
+            cliente:        r[ci(['Cliente', 'Customer'])] || '',
+            factura:        r[ci(['Factura', 'Invoice', 'No. Factura'])] || '',
+            fecha_factura:  r[ci(['Fecha Factura', 'Fecha'])] || null,
+            vencimiento:    r[ci(['Vencimiento', 'Due Date', 'Fecha Vencimiento'])] || null,
+            monto:          parseFloat(String(r[ci(['Monto', 'Amount', 'Total'])] || '0').replace(/[^0-9.-]/g, '')) || 0,
+            moneda:         r[ci(['Moneda', 'Currency'])] || 'USD',
+            estado:         r[ci(['Estado', 'Status'])] || 'Pendiente',
+            area_comercial: r[ci(['Area', 'Area Comercial'])] || '',
+            gestor_cobro:   r[ci(['Gestor', 'Gestor Cobro', 'Cobrador'])] || '',
+            proyecto:       r[ci(['Proyecto', 'Project'])] || '',
+            hito:           r[ci(['Hito', 'Milestone'])] || '',
+            tipo:           r[ci(['Tipo', 'Type'])] || 'Normal',
+            notas:          r[ci(['Notas', 'Notes', 'Observaciones'])] || '',
+            ingest_run_id:  ingestRunId,
+          })).filter((m: { cliente: string; monto: number }) => m.cliente || m.monto);
+
+          if (mapped.length > 0) {
+            const { error: upsErr } = await supabase
+              .schema('silver_finance' as 'public')
+              .from('cxc_items')
+              .insert(mapped);
+
+            if (upsErr) {
+              lastError = upsErr.message;
+              console.error(`CxC chunk ${c} error:`, upsErr.message);
+            } else {
+              sheetInserted += mapped.length;
+            }
+          }
+
+          setProgress({ current: Math.min((c + 1) * CHUNK, dataRows.length), total: dataRows.length, stage: `Ingresando CxC: ${sheetName}...` });
+          if (c % 10 === 0) await new Promise(r => setTimeout(r, 0));
+        }
+
+        if (sheetInserted > 0) {
+          totalInserted += sheetInserted;
+          sheetsProcessed.push(`${sheetName}(CxC:${sheetInserted}${lastError ? ',partial' : ''})`);
+        } else if (lastError) {
+          sheetsProcessed.push(`${sheetName}(CxC:ERROR:${lastError.slice(0, 120)})`);
+        }
+      }
+
+      // ── Non-direct sheets: send to Edge Function in chunks too ─────────────
+      if (nonDirectSheets.length > 0) {
         const SHEET_CHUNK_ROWS = 500; // max rows per Edge Function call
 
-        for (const sheet of nonMrpSheets) {
+        for (const sheet of nonDirectSheets) {
           const totalRows = sheet.rows.length;
           const chunks = Math.ceil(totalRows / SHEET_CHUNK_ROWS);
 
