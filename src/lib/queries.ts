@@ -62,6 +62,17 @@ export interface MRPItem {
   created_at: string; ingest_run_id: string;
 }
 
+export interface CxCItem {
+  id?: number;
+  empresa: string; cliente: string; factura: string;
+  fecha_factura: string; vencimiento: string;
+  monto: number; moneda: string; estado: string;
+  dias_mora: number; area_comercial: string;
+  gestor_cobro: string; proyecto: string; hito: string;
+  tipo: string; notas: string;
+  ingest_run_id: string; created_at: string;
+}
+
 export type TimePeriod = '1m' | '3m' | '6m' | '12m' | 'all';
 
 export function getDateCutoff(period: TimePeriod): string | null {

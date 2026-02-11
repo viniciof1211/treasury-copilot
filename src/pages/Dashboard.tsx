@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   TrendingUp, TrendingDown, AlertTriangle, Clock, ShieldCheck,
   Lightbulb, RefreshCw, BarChart3, Wallet, CreditCard, Landmark,
-  Target, History, Layers, Activity, DollarSign,
+  Target, History, Layers, Activity, DollarSign, Receipt, Presentation,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Layout } from '../components/layout/Layout';
@@ -74,6 +74,10 @@ export function Dashboard() {
   const runwayMonths = projection.filter(p => Number(p.projected_balance) > 0).length;
   const uniqueOps = useMemo(() => { const m = new Set<string>(); flujo.forEach(r => m.add(`${r.compania}|${r.operacion}|${r.banco}`)); return m.size; }, [flujo]);
   const uniqueBanks = useMemo(() => new Set(flujo.map(r => r.banco).filter(Boolean)).size, [flujo]);
+
+  // ── Debt breakdown: LP vs CP ───────────────────────────────────────────
+  const debtLP = useMemo(() => flujo.filter(r => r.tipo === 'Largo Plazo').reduce((s, r) => s + flujoUSD(r, 'saldo_original'), 0), [flujo, flujoUSD]);
+  const debtCP = useMemo(() => flujo.filter(r => r.tipo !== 'Largo Plazo').reduce((s, r) => s + flujoUSD(r, 'saldo_original'), 0), [flujo, flujoUSD]);
   const now = new Date();
   const overdueCxP = cxp.filter(r => r.vencimiento_fecha && new Date(r.vencimiento_fecha) < now);
 
@@ -123,18 +127,22 @@ export function Dashboard() {
     return Object.values(m).map(v => ({ ...v, neto: v.ingresos - v.egresos })).sort((a, b) => b.neto - a.neto);
   }, [cxp, flujo, flujoUSD]);
 
+  // ── Language toggle ─────────────────────────────────────────────────────
+  const [lang, setLang] = useState<'es' | 'en'>(() => (localStorage.getItem('narrative_lang') as 'es' | 'en') || 'es');
+  const toggleLang = useCallback(() => { const next = lang === 'es' ? 'en' : 'es'; setLang(next); localStorage.setItem('narrative_lang', next); }, [lang]);
+
   // ── Insights (USD) ─────────────────────────────────────────────────────────
-  const insights: { type: 'insight' | 'risk' | 'action'; text: string }[] = [];
+  const insights: { type: 'insight' | 'risk' | 'action'; text: string; textEn: string }[] = [];
   if (totalCxP > 0 && totalInflows > 0) {
-    if (ratio >= 1.5) insights.push({ type: 'insight', text: `Liquidez saludable: ingresos (${fmtCompactUSD(totalInflows)}) cubren ${ratio.toFixed(1)}x las CxP (${fmtCompactUSD(totalCxP)}).` });
-    else if (ratio >= 1) insights.push({ type: 'risk', text: `Cobertura ajustada (${ratio.toFixed(1)}x). Margen limitado.` });
-    else insights.push({ type: 'risk', text: `Alerta: CxP > Ingresos. Gap: ${fmtCompactUSD(totalCxP - totalInflows)}.` });
+    if (ratio >= 1.5) insights.push({ type: 'insight', text: `Liquidez saludable: ingresos (${fmtCompactUSD(totalInflows)}) cubren ${ratio.toFixed(1)}x las CxP (${fmtCompactUSD(totalCxP)}).`, textEn: `Healthy liquidity: income (${fmtCompactUSD(totalInflows)}) covers ${ratio.toFixed(1)}x AP (${fmtCompactUSD(totalCxP)}).` });
+    else if (ratio >= 1) insights.push({ type: 'risk', text: `Cobertura ajustada (${ratio.toFixed(1)}x). Margen limitado.`, textEn: `Tight coverage (${ratio.toFixed(1)}x). Limited margin.` });
+    else insights.push({ type: 'risk', text: `Alerta: CxP > Ingresos. Gap: ${fmtCompactUSD(totalCxP - totalInflows)}.`, textEn: `Alert: AP > Income. Gap: ${fmtCompactUSD(totalCxP - totalInflows)}.` });
   }
-  if (overdueCxP.length > 0) { const amt = overdueCxP.reduce((s, r) => s + cxpUSD(r), 0); insights.push({ type: 'action', text: `${overdueCxP.length} CxP vencidas (${fmtCompactUSD(amt)}). Gestionar cobro/priorización.` }); }
-  if (totalIntereses > 0) insights.push({ type: 'insight', text: `Carga financiera: ${fmtCompactUSD(totalIntereses)} intereses + ${fmtCompactUSD(totalPrincipal)} principal.` });
-  if (uniqueOps > 0) insights.push({ type: 'insight', text: `${uniqueOps} líneas de crédito en ${uniqueBanks} bancos. Saldo total: ${fmtCompactUSD(totalSaldo)}.` });
-  if (ingestRuns.length > 0) insights.push({ type: 'insight', text: `${ingestRuns.length} ingestas. Última: ${ingestRuns[0]?.source_file?.split('_').pop() || 'N/A'}.` });
-  if (cxp.length === 0 && flujo.length === 0) insights.push({ type: 'action', text: 'Sin datos. Sube archivos en "Fuentes de Datos" para activar el dashboard.' });
+  if (overdueCxP.length > 0) { const amt = overdueCxP.reduce((s, r) => s + cxpUSD(r), 0); insights.push({ type: 'action', text: `${overdueCxP.length} CxP vencidas (${fmtCompactUSD(amt)}). Gestionar cobro/priorización.`, textEn: `${overdueCxP.length} overdue AP (${fmtCompactUSD(amt)}). Manage collection/prioritization.` }); }
+  if (totalIntereses > 0) insights.push({ type: 'insight', text: `Carga financiera: ${fmtCompactUSD(totalIntereses)} intereses + ${fmtCompactUSD(totalPrincipal)} principal.`, textEn: `Financial burden: ${fmtCompactUSD(totalIntereses)} interest + ${fmtCompactUSD(totalPrincipal)} principal.` });
+  if (uniqueOps > 0) insights.push({ type: 'insight', text: `${uniqueOps} líneas de crédito en ${uniqueBanks} bancos. Saldo total: ${fmtCompactUSD(totalSaldo)}.`, textEn: `${uniqueOps} credit lines across ${uniqueBanks} banks. Total balance: ${fmtCompactUSD(totalSaldo)}.` });
+  if (ingestRuns.length > 0) insights.push({ type: 'insight', text: `${ingestRuns.length} ingestas. Última: ${ingestRuns[0]?.source_file?.split('_').pop() || 'N/A'}.`, textEn: `${ingestRuns.length} ingestions. Latest: ${ingestRuns[0]?.source_file?.split('_').pop() || 'N/A'}.` });
+  if (cxp.length === 0 && flujo.length === 0) insights.push({ type: 'action', text: 'Sin datos. Sube archivos en "Fuentes de Datos" para activar el dashboard.', textEn: 'No data. Upload files in "Data Sources" to activate the dashboard.' });
 
   const hasData = cxp.length > 0 || flujo.length > 0 || projection.length > 0;
 
@@ -180,12 +188,30 @@ export function Dashboard() {
               <KPICard title="Total CxP" value={totalCxP} icon={CreditCard} currency="USD" semaphore={semaphore(totalCxP, 100000, 500000, true)} subtitle={`${cxp.length} facturas`} />
               <KPICard title="Ingresos Operativos" value={totalInflows} icon={Wallet} currency="USD" semaphore={totalInflows > 0 ? 'green' : 'red'} subtitle={`${flujo.length} operaciones`} />
               <KPICard title="Cashflow Neto" value={netCashflow} icon={netCashflow >= 0 ? TrendingUp : TrendingDown} currency="USD" semaphore={semaphore(netCashflow, 0, -50000)} subtitle={netCashflow >= 0 ? 'Superávit' : 'Déficit'} />
+              <KPICard title="Deuda Largo Plazo" value={debtLP} icon={Landmark} currency="USD" semaphore={debtLP > 0 ? 'yellow' : 'green'} subtitle="USD — Largo Plazo" />
+              <KPICard title="Deuda Corto Plazo" value={debtCP} icon={Activity} currency="USD" semaphore={debtCP > 0 ? 'yellow' : 'green'} subtitle="Capital Trabajo" />
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-4">
               <KPICard title="Ratio Cobertura" value={ratio} icon={ShieldCheck} format="number" semaphore={semaphore(ratio, 1.5, 1.0)} subtitle="Ingresos / CxP" />
               <KPICard title="Runway" value={runwayMonths} icon={Clock} format="months" semaphore={semaphore(runwayMonths, 6, 3)} subtitle="Balance positivo" />
+              <KPICard title="Deuda Total" value={totalSaldo} icon={Landmark} currency="USD" semaphore={totalSaldo > 0 ? 'yellow' : 'green'} subtitle={`${uniqueOps} líneas · ${uniqueBanks} bancos`} />
             </div>
 
             {/* Quick-access cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <Link to="/ingresos" className="group">
+                <Card className="hover:shadow-md transition-shadow border-l-4 border-l-purple-400 h-full">
+                  <CardContent className="pt-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-purple-50 flex items-center justify-center"><Receipt className="w-5 h-5 text-purple-600" /></div>
+                      <div>
+                        <p className="font-semibold text-gray-900 group-hover:text-purple-600 transition-colors">Ingresos / CxC</p>
+                        <p className="text-xs text-gray-500">CxC · Presupuesto · Aging · Cobro</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
               <Link to="/cashflow" className="group">
                 <Card className="hover:shadow-md transition-shadow border-l-4 border-l-blue-400 h-full">
                   <CardContent className="pt-4">
@@ -212,14 +238,14 @@ export function Dashboard() {
                   </CardContent>
                 </Card>
               </Link>
-              <Link to="/data" className="group">
+              <Link to="/board" className="group">
                 <Card className="hover:shadow-md transition-shadow border-l-4 border-l-amber-400 h-full">
                   <CardContent className="pt-4">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center"><History className="w-5 h-5 text-amber-600" /></div>
+                      <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center"><Presentation className="w-5 h-5 text-amber-600" /></div>
                       <div>
-                        <p className="font-semibold text-gray-900 group-hover:text-amber-600 transition-colors">Fuentes de Datos</p>
-                        <p className="text-xs text-gray-500">{ingestRuns.length} ingestas · Subir Excel</p>
+                        <p className="font-semibold text-gray-900 group-hover:text-amber-600 transition-colors">Junta Directiva</p>
+                        <p className="text-xs text-gray-500">KPIs · Notas · Exportar PDF</p>
                       </div>
                     </div>
                   </CardContent>
@@ -285,9 +311,14 @@ export function Dashboard() {
               </Card>
             )}
 
-            {/* Narrative */}
+            {/* Narrative with Lang Toggle */}
             <Card className="border-l-4 border-l-[#1A4A28]">
-              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Lightbulb className="w-4 h-4 text-[#C9A84C]" />Narrativa Ejecutiva</CardTitle></CardHeader>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2 text-base"><Lightbulb className="w-4 h-4 text-[#C9A84C]" />{lang === 'es' ? 'Narrativa Ejecutiva' : 'Executive Narrative'}</CardTitle>
+                  <button onClick={toggleLang} className="px-2.5 py-1 text-xs font-semibold border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">{lang === 'es' ? 'EN' : 'ES'}</button>
+                </div>
+              </CardHeader>
               <CardContent>
                 {insights.length > 0 ? (
                   <div className="space-y-2.5">
@@ -299,13 +330,17 @@ export function Dashboard() {
                           {item.type === 'insight' && <TrendingUp className="w-4 h-4 text-emerald-600" />}
                         </span>
                         <div>
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{item.type === 'risk' ? 'Riesgo' : item.type === 'action' ? 'Acción' : 'Hallazgo'}</span>
-                          <p className="text-sm text-gray-800 mt-0.5">{item.text}</p>
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                            {lang === 'es'
+                              ? (item.type === 'risk' ? 'Riesgo' : item.type === 'action' ? 'Acción' : 'Hallazgo')
+                              : (item.type === 'risk' ? 'Risk' : item.type === 'action' ? 'Action' : 'Finding')}
+                          </span>
+                          <p className="text-sm text-gray-800 mt-0.5">{lang === 'es' ? item.text : item.textEn}</p>
                         </div>
                       </div>
                     ))}
                   </div>
-                ) : <p className="text-sm text-gray-400 text-center py-6">Los insights se generan al cargar datos.</p>}
+                ) : <p className="text-sm text-gray-400 text-center py-6">{lang === 'es' ? 'Los insights se generan al cargar datos.' : 'Insights are generated when data is loaded.'}</p>}
               </CardContent>
             </Card>
 

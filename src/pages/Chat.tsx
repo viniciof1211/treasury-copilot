@@ -16,6 +16,12 @@ Ayudar a Tesorería a:
 
 Fuentes de Verdad
 - Tablas/Vistas en Supabase (bronze_finance., silver_finance., dim_*).
+- Tablas clave de silver_finance:
+  * flujo_semanal — cuotas, principal, intereses de operaciones crediticias (ingreso operativo)
+  * cxp_items — cuentas por pagar (facturas a proveedores)
+  * cxc_items — cuentas por cobrar (facturas a clientes, aging, gestor cobro, área comercial)
+  * mrp_master — planning de compras / MRP (SKUs, inventario, alertas)
+  * projection_12m — proyecciones de flujo de caja 12 meses
 - Archivos ingestado(s) a Supabase Storage (Excel/CSV) SOLO si fueron procesados por el endpoint de ingesta y quedaron registrados en bronze_finance.ingest_runs.
 - Nunca uses números "vistos en el chat" como verdad si no provienen de query/tool.
 

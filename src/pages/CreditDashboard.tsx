@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Landmark, Layers, Activity, Percent, BanknoteIcon, DollarSign,
   CalendarDays, RefreshCw, BarChart3, TrendingUp, TrendingDown, AlertTriangle, Lightbulb,
+  Filter, CheckCircle2,
 } from 'lucide-react';
 import { Layout } from '../components/layout/Layout';
 import { KPICard } from '../components/dashboard/KPICard';
@@ -13,7 +14,7 @@ import {
   formatCurrency, formatCompactCurrency, formatMonthYear, formatShortDate,
   formatDate, semaphore, ARA_COLORS,
 } from '../lib/utils';
-import { useExchangeRate, toUSD, normalizeCurrency } from '../hooks/useExchangeRate';
+import { useExchangeRate, toUSD, fromUSD, normalizeCurrency } from '../hooks/useExchangeRate';
 import {
   querySQL, type FlujoItem, type TimePeriod, getDateCutoff, PERIOD_LABELS, tooltipStyle,
 } from '../lib/queries';
@@ -50,6 +51,7 @@ export function CreditDashboard() {
   const [period, setPeriod] = useState<TimePeriod>('all');
   const [lastRefresh, setLastRefresh] = useState(new Date());
   const [detailRecord, setDetailRecord] = useState<Record<string, unknown> | null>(null);
+  const [bankFilter, setBankFilter] = useState<string>('all');
 
   const { rate } = useExchangeRate();
 
@@ -75,8 +77,20 @@ export function CreditDashboard() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  // ── Bank list for filter ───────────────────────────────────────────────
+  const allBanks = useMemo(() => {
+    const s = new Set<string>();
+    flujoAll.forEach(r => { if (r.banco) s.add(r.banco); });
+    return Array.from(s).sort();
+  }, [flujoAll]);
+
   const cutoff = getDateCutoff(period);
-  const flujo = useMemo(() => cutoff ? flujoAll.filter(r => (r.vencimiento || r.created_at) >= cutoff) : flujoAll, [flujoAll, cutoff]);
+  const flujo = useMemo(() => {
+    let d = flujoAll;
+    if (cutoff) d = d.filter(r => (r.vencimiento || r.created_at) >= cutoff);
+    if (bankFilter !== 'all') d = d.filter(r => r.banco === bankFilter);
+    return d;
+  }, [flujoAll, cutoff, bankFilter]);
 
   // ── Metrics (all converted to USD for aggregation) ──────────────────────
   const totalCuota = flujo.reduce((s, r) => s + asUSD(r, 'cuota'), 0);
@@ -87,6 +101,31 @@ export function CreditDashboard() {
   const intRatio = totalPrincipal > 0 ? (totalIntereses / totalPrincipal) * 100 : 0;
   const now = new Date();
   const nowMs = now.getTime();
+
+  // ── Long-term vs Short-term debt breakdown ─────────────────────────────
+  const debtLP = useMemo(() => flujo.filter(r => r.tipo === 'Largo Plazo'), [flujo]);
+  const debtCP = useMemo(() => flujo.filter(r => r.tipo !== 'Largo Plazo'), [flujo]);
+  const totalSaldoLP = debtLP.reduce((s, r) => s + asUSD(r, 'saldo_original'), 0);
+  const totalSaldoCP = debtCP.reduce((s, r) => s + asUSD(r, 'saldo_original'), 0);
+
+  // ── Amortization tracking (pctAmortized here; cumulativeAmort after capEvol) ─
+  const pctAmortized = totalSaldo > 0 ? ((totalSaldo - totalCapAct) / totalSaldo) * 100 : 0;
+
+  // ── Currency display helper by term ───────────────────────────────────
+  /** LP → USD, CP → CRC (convert if needed) */
+  const termCurrency = useCallback((item: FlujoItem) => {
+    return item.tipo === 'Largo Plazo' ? 'USD' : 'CRC';
+  }, []);
+
+  const termAmount = useCallback((item: FlujoItem, field: 'cuota' | 'principal' | 'intereses' | 'saldo_original' | 'capital' | 'capital_actualizado') => {
+    const raw = Number(item[field]) || 0;
+    const target = termCurrency(item);
+    const normalized = normalizeCurrency(item.moneda);
+    if (normalized === target) return raw;
+    // Convert: first to USD, then from USD to target
+    const usd = toUSD(raw, item.moneda, rate);
+    return fromUSD(usd, target, rate);
+  }, [rate, termCurrency]);
 
   // Unique operations
   const uniqueOps = useMemo(() => {
@@ -163,6 +202,12 @@ export function CreditDashboard() {
     return Object.values(m).sort((a, b) => a.month.localeCompare(b.month)).map(x => ({ ...x, label: formatMonthYear(x.month + '-01') }));
   }, [flujo, asUSD]);
 
+  // ── Cumulative amortization (depends on capEvol) ──────────────────────────
+  const cumulativeAmort = useMemo(() => {
+    let running = 0;
+    return capEvol.map(m => { running += m.principal; return { ...m, cumulativeAmort: running, pctPaid: totalSaldo > 0 ? (running / totalSaldo) * 100 : 0 }; });
+  }, [capEvol, totalSaldo]);
+
   // ── By Moneda ──────────────────────────────────────────────────────────────
   const byMoneda = useMemo(() => {
     const m: Record<string, { moneda: string; cuota: number; count: number }> = {};
@@ -175,19 +220,7 @@ export function CreditDashboard() {
     return Object.values(m);
   }, [flujo]);
 
-  // By Compania (USD)
-  const byCompania = useMemo(() => {
-    const m: Record<string, { compania: string; cuota: number; principal: number; intereses: number; saldo: number }> = {};
-    flujo.forEach(r => {
-      const c = r.compania || 'Sin compañía';
-      if (!m[c]) m[c] = { compania: c, cuota: 0, principal: 0, intereses: 0, saldo: 0 };
-      m[c].cuota += asUSD(r, 'cuota');
-      m[c].principal += asUSD(r, 'principal');
-      m[c].intereses += asUSD(r, 'intereses');
-      m[c].saldo += asUSD(r, 'saldo_original');
-    });
-    return Object.values(m).sort((a, b) => b.cuota - a.cuota);
-  }, [flujo, asUSD]);
+  // (Removed: byCompania — "Distribución de Cuotas por Compañía")
 
   // ── Insights ───────────────────────────────────────────────────────────────
   const insights: { type: 'insight' | 'risk' | 'action'; text: string }[] = [];
@@ -210,7 +243,17 @@ export function CreditDashboard() {
             <h1 className="text-3xl font-bold text-gray-900">Operaciones & Líneas de Crédito</h1>
             <p className="text-gray-500 mt-1 text-sm">Control longitudinal de crédito, bancos, composición y vencimientos ($ USD)</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* Bank Filter */}
+            <div className="flex items-center gap-1.5">
+              <Filter className="w-3.5 h-3.5 text-gray-400" />
+              <select value={bankFilter} onChange={e => setBankFilter(e.target.value)}
+                className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700 focus:ring-1 focus:ring-[#1A4A28] focus:border-[#1A4A28]">
+                <option value="all">Todos los Bancos</option>
+                {allBanks.map(b => <option key={b} value={b}>{b}</option>)}
+              </select>
+            </div>
+            {/* Period */}
             <div className="flex bg-gray-100 rounded-lg p-0.5">
               {(Object.keys(PERIOD_LABELS) as TimePeriod[]).map(p => (
                 <button key={p} onClick={() => setPeriod(p)}
@@ -233,14 +276,21 @@ export function CreditDashboard() {
           <Card><CardContent><EmptyState text='Sin operaciones de crédito. Ingesta "Control de Operaciones" o "Flujo Semanal" en Fuentes de Datos.' /></CardContent></Card>
         ) : (
           <>
-            {/* KPIs */}
+            {/* KPIs Row 1 */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
               <KPICard title="Líneas de Crédito" value={uniqueOps.length} icon={Layers} format="number" semaphore="green" subtitle={`${uniqueBanks.size} bancos`} />
               <KPICard title="Saldo Original" value={totalSaldo} icon={BanknoteIcon} subtitle="Total desembolsado" />
               <KPICard title="Capital Vigente" value={totalCapAct} icon={Activity} semaphore={totalCapAct > 0 ? 'yellow' : 'green'} subtitle="Por amortizar" />
+              <KPICard title="% Amortizado" value={`${pctAmortized.toFixed(1)}%`} icon={CheckCircle2} format="text" semaphore={pctAmortized > 50 ? 'green' : pctAmortized > 20 ? 'yellow' : 'red'} subtitle="Saldo pagado" />
+              <KPICard title="Deuda Largo Plazo" value={totalSaldoLP} icon={Landmark} subtitle="USD — Largo Plazo" />
+              <KPICard title="Deuda Corto Plazo" value={totalSaldoCP} icon={DollarSign} subtitle="Capital Trabajo" />
+            </div>
+            {/* KPIs Row 2 */}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               <KPICard title="Principal" value={totalPrincipal} icon={TrendingDown} subtitle="Abonos a capital" />
               <KPICard title="Intereses" value={totalIntereses} icon={Percent} semaphore={semaphore(intRatio, 5, 15, true)} subtitle={`${intRatio.toFixed(1)}% del principal`} />
               <KPICard title="Cuotas Totales" value={totalCuota} icon={DollarSign} subtitle={`${uniqueCompanies.size} compañías`} />
+              <KPICard title="Banco Filtrado" value={bankFilter === 'all' ? 'Todos' : bankFilter} icon={Landmark} format="text" subtitle={bankFilter === 'all' ? `${allBanks.length} bancos` : `${flujo.length} operaciones`} />
             </div>
 
             {/* Gantt */}
@@ -335,20 +385,23 @@ export function CreditDashboard() {
             {/* Capital Evolution + Moneda + Compania */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <Card className="lg:col-span-2">
-                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Activity className="w-4 h-4 text-[#1A4A28]" />Evolución Longitudinal: Saldo vs Capital Actualizado ($)</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Activity className="w-4 h-4 text-[#1A4A28]" />Seguimiento de Amortización: Saldo vs Capital ($)</CardTitle></CardHeader>
                 <CardContent>
-                  {capEvol.length > 0 ? (
-                    <ResponsiveContainer width="100%" height={300}>
-                      <ComposedChart data={capEvol}>
+                  {cumulativeAmort.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={320}>
+                      <ComposedChart data={cumulativeAmort}>
                         <defs><linearGradient id="sGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={ARA_COLORS.blue} stopOpacity={0.2} /><stop offset="100%" stopColor={ARA_COLORS.blue} stopOpacity={0} /></linearGradient></defs>
                         <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                         <XAxis dataKey="label" stroke="#9ca3af" fontSize={10} />
-                        <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
-                        <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
+                        <YAxis yAxisId="left" stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
+                        <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" fontSize={10} tickFormatter={v => `${v}%`} domain={[0, 100]} />
+                        <Tooltip formatter={(v: number, name: string) => name.includes('%') ? `${v.toFixed(1)}%` : formatCurrency(v)} contentStyle={tooltipStyle} />
                         <Legend wrapperStyle={{ fontSize: 10 }} />
-                        <Area type="monotone" dataKey="saldo_original" stroke={ARA_COLORS.blue} strokeWidth={2} fill="url(#sGrad)" name="Saldo Original $" />
-                        <Line type="monotone" dataKey="capital_actualizado" stroke={ARA_COLORS.gold} strokeWidth={2} dot={{ r: 3 }} name="Capital Vigente $" />
-                        <Bar dataKey="principal" fill={ARA_COLORS.primary} name="Amortización $" radius={[2, 2, 0, 0]} opacity={0.6} />
+                        <Area yAxisId="left" type="monotone" dataKey="saldo_original" stroke={ARA_COLORS.blue} strokeWidth={2} fill="url(#sGrad)" name="Saldo Original $" />
+                        <Line yAxisId="left" type="monotone" dataKey="capital_actualizado" stroke={ARA_COLORS.gold} strokeWidth={2} dot={{ r: 3 }} name="Capital Vigente $" />
+                        <Bar yAxisId="left" dataKey="principal" fill={ARA_COLORS.primary} name="Amortización Mensual $" radius={[2, 2, 0, 0]} opacity={0.6} />
+                        <Line yAxisId="left" type="monotone" dataKey="cumulativeAmort" stroke="#8B5CF6" strokeWidth={2} strokeDasharray="5 5" dot={false} name="Amortización Acumulada $" />
+                        <Line yAxisId="right" type="monotone" dataKey="pctPaid" stroke="#EC4899" strokeWidth={1.5} dot={false} name="% Pagado" />
                       </ComposedChart>
                     </ResponsiveContainer>
                   ) : <EmptyState text="Sin datos de evolución." />}
@@ -382,24 +435,6 @@ export function CreditDashboard() {
               </Card>
             </div>
 
-            {/* Cuotas por Compañía */}
-            <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Landmark className="w-4 h-4 text-[#1A4A28]" />Distribución de Cuotas por Compañía ($)</CardTitle></CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={260}>
-                  <BarChart data={byCompania.map(c => ({ ...c, compania: c.compania.length > 20 ? c.compania.slice(0, 17) + '...' : c.compania }))}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="compania" stroke="#9ca3af" fontSize={9} />
-                    <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
-                    <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
-                    <Legend wrapperStyle={{ fontSize: 10 }} />
-                    <Bar dataKey="principal" stackId="a" fill={ARA_COLORS.primary} name="Principal $" />
-                    <Bar dataKey="intereses" stackId="a" fill={ARA_COLORS.gold} name="Intereses $" radius={[3, 3, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-
             {/* Detail table */}
             <Card>
               <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Layers className="w-4 h-4 text-[#1A4A28]" />Detalle de Operaciones de Crédito</CardTitle></CardHeader>
@@ -420,10 +455,10 @@ export function CreditDashboard() {
                             <td className="py-2 pr-3 text-gray-600 text-xs">{op.compania || '—'}</td>
                             <td className="py-2 pr-3 text-gray-600 text-xs">{op.banco || '—'}</td>
                             <td className="py-2 pr-3"><Badge variant={op.tipo === 'Largo Plazo' ? 'default' : op.tipo === 'Capital Trabajo' ? 'warning' : 'info'}>{op.tipo || '—'}</Badge></td>
-                            <td className="py-2 pr-3 text-right font-semibold tabular-nums text-xs">{formatCurrency(Number(op.saldo_original) || 0, normalizeCurrency(op.moneda))}</td>
-                            <td className="py-2 pr-3 text-right tabular-nums text-xs">{formatCurrency(Number(op.cuota) || 0, normalizeCurrency(op.moneda))}</td>
+                            <td className="py-2 pr-3 text-right font-semibold tabular-nums text-xs">{formatCurrency(termAmount(op, 'saldo_original'), termCurrency(op))}</td>
+                            <td className="py-2 pr-3 text-right tabular-nums text-xs">{formatCurrency(termAmount(op, 'cuota'), termCurrency(op))}</td>
                             <td className={`py-2 pr-3 text-xs ${expired ? 'text-red-600 font-bold' : 'text-gray-600'}`}>{op.vencimiento ? formatDate(op.vencimiento) : '—'}{expired && <span className="ml-1 text-[8px] bg-red-100 text-red-700 px-1 rounded">VENCIDO</span>}</td>
-                            <td className="py-2 text-xs text-gray-500">{normalizeCurrency(op.moneda)}</td>
+                            <td className="py-2 text-xs text-gray-500"><Badge variant={termCurrency(op) === 'USD' ? 'info' : 'default'}>{termCurrency(op)}</Badge></td>
                           </tr>
                         );
                       })}
@@ -431,6 +466,7 @@ export function CreditDashboard() {
                   </table>
                   {uniqueOps.length > 25 && <p className="text-xs text-gray-400 mt-2 text-center">Mostrando 25 de {uniqueOps.length}.</p>}
                   <p className="text-xs text-gray-400 mt-1 text-center italic">Doble clic en una fila para ver/editar detalle completo</p>
+                  <p className="text-xs text-gray-400 mt-1 text-center">Convención: Largo Plazo → USD ($) · Corto Plazo / Capital Trabajo → CRC (₡)</p>
                 </div>
               </CardContent>
             </Card>

@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   TrendingUp, TrendingDown, AlertTriangle, Lightbulb, RefreshCw, BarChart3,
   Wallet, CreditCard, Building2, CalendarDays, Target, ShieldCheck, Clock,
-  Filter, CheckCircle2, XCircle, AlertOctagon, Banknote,
+  Filter, CheckCircle2, XCircle, AlertOctagon, Banknote, Download,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { Layout } from '../components/layout/Layout';
 import { KPICard } from '../components/dashboard/KPICard';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
@@ -66,6 +67,12 @@ export function CashflowDashboard() {
   const [detailRecord, setDetailRecord] = useState<Record<string, unknown> | null>(null);
   const [detailType, setDetailType] = useState<'cxp' | 'flujo'>('cxp');
   const [buFilter, setBuFilter] = useState<string>('all');
+  const [provFilter, setProvFilter] = useState<string>('all');
+  const [negocioFilter, setNegocioFilter] = useState<string>('all');
+  const [budgetTarget, setBudgetTarget] = useState<number>(() => {
+    const saved = localStorage.getItem('cashflow_budget_target');
+    return saved ? parseFloat(saved) : 0;
+  });
   const [lastRefresh, setLastRefresh] = useState(new Date());
 
   const fetchData = useCallback(async () => {
@@ -92,14 +99,29 @@ export function CashflowDashboard() {
     return Array.from(s).sort();
   }, [cxpAll, flujoAll]);
 
-  // ── Filter ─────────────────────────────────────────────────────────────────
+  // ── Provider & Negocio lists ──────────────────────────────────────────────
+  const allProviders = useMemo(() => {
+    const s = new Set<string>();
+    cxpAll.forEach(r => { if (r.proveedor) s.add(r.proveedor); });
+    return Array.from(s).sort();
+  }, [cxpAll]);
+
+  const allNegocios = useMemo(() => {
+    const s = new Set<string>();
+    cxpAll.forEach(r => { if (r.negocio) s.add(r.negocio); });
+    return Array.from(s).sort();
+  }, [cxpAll]);
+
+  // ── Filters ─────────────────────────────────────────────────────────────────
   const cutoff = getDateCutoff(period);
   const cxp = useMemo(() => {
     let d = cxpAll;
     if (cutoff) d = d.filter(r => (r.vencimiento_fecha || r.created_at) >= cutoff);
     if (buFilter !== 'all') d = d.filter(r => r.empresa === buFilter);
+    if (provFilter !== 'all') d = d.filter(r => r.proveedor === provFilter);
+    if (negocioFilter !== 'all') d = d.filter(r => r.negocio === negocioFilter);
     return d;
-  }, [cxpAll, cutoff, buFilter]);
+  }, [cxpAll, cutoff, buFilter, provFilter, negocioFilter]);
   const flujo = useMemo(() => {
     let d = flujoAll;
     if (cutoff) d = d.filter(r => (r.vencimiento || r.created_at) >= cutoff);
@@ -210,6 +232,62 @@ export function CashflowDashboard() {
     return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, total]) => ({ name: name.length > 25 ? name.slice(0, 22) + '...' : name, total }));
   }, [cxp]);
 
+  // ── Negocio breakdown (sub-BU) ─────────────────────────────────────────────
+  const negocioBreakdown = useMemo(() => {
+    const m: Record<string, { negocio: string; monto: number; count: number }> = {};
+    cxp.forEach(r => {
+      const n = r.negocio || 'Sin negocio';
+      if (!m[n]) m[n] = { negocio: n, monto: 0, count: 0 };
+      m[n].monto += Number(r.monto_usd) || 0;
+      m[n].count++;
+    });
+    return Object.values(m).sort((a, b) => b.monto - a.monto);
+  }, [cxp]);
+
+  // ── Monthly egresos trend ──────────────────────────────────────────────────
+  const egresosTrend = useMemo(() => {
+    const m: Record<string, number> = {};
+    cxp.forEach(r => {
+      const k = (r.vencimiento_fecha || r.created_at || '').slice(0, 7);
+      if (k) m[k] = (m[k] || 0) + (Number(r.monto_usd) || 0);
+    });
+    return Object.entries(m).sort(([a], [b]) => a.localeCompare(b)).map(([mo, total]) => ({ month: mo, label: formatMonthYear(mo + '-01'), total }));
+  }, [cxp]);
+
+  // ── Budget vs real ─────────────────────────────────────────────────────────
+  const budgetVsReal = useMemo(() => {
+    if (!budgetTarget) return [];
+    return egresosTrend.map(e => ({
+      ...e, budget: budgetTarget,
+      variance: e.total - budgetTarget,
+      fill: e.total <= budgetTarget ? ARA_COLORS.primary : ARA_COLORS.red,
+    }));
+  }, [egresosTrend, budgetTarget]);
+
+  // ── Provider currency mapping ──────────────────────────────────────────────
+  const provCurrencyMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    // CxP doesn't have moneda, but flujo does — try to match by compania/empresa
+    flujoAll.forEach(r => {
+      if (r.moneda) m[r.compania || ''] = normalizeCurrency(r.moneda);
+    });
+    return m;
+  }, [flujoAll]);
+
+  // ── Export helper ──────────────────────────────────────────────────────────
+  const exportCxPToXLSX = useCallback(() => {
+    const data = cxp.map(r => ({
+      Proveedor: r.proveedor, Empresa: r.empresa, Negocio: r.negocio,
+      Monto_USD: Number(r.monto_usd) || 0, Vencimiento: r.vencimiento_fecha,
+      Prioridad: r.prioridad, Clasificacion: r.clasificacion,
+      Responsable: r.responsable, Detalle: r.detalle,
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'CxP');
+    XLSX.writeFile(wb, `CxP_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }, [cxp]);
+
   // CxP next 4 weeks
   const weekBuckets = useMemo(() => {
     const weeks: { label: string; p1: number; p2: number; p3: number; other: number }[] = [];
@@ -230,26 +308,30 @@ export function CashflowDashboard() {
     return weeks;
   }, [cxp]);
 
+  // ── Language toggle ─────────────────────────────────────────────────────────
+  const [lang, setLang] = useState<'es' | 'en'>(() => (localStorage.getItem('narrative_lang') as 'es' | 'en') || 'es');
+  const toggleLang = useCallback(() => { const next = lang === 'es' ? 'en' : 'es'; setLang(next); localStorage.setItem('narrative_lang', next); }, [lang]);
+
   // ── Insights (process gap-driven) ──────────────────────────────────────────
-  const insights: { type: 'insight' | 'risk' | 'action'; text: string }[] = [];
-  if (overdueRate > 30) insights.push({ type: 'risk', text: `KPI-06 Mora: ${overdueRate.toFixed(0)}% de CxP vencidas (${overdueCxP.length} items = ${formatCompactCurrency(overdueAmount)}). R4: Reacción tardía — activar micro-ciclo diario.` });
-  else if (overdueRate > 10) insights.push({ type: 'risk', text: `${overdueRate.toFixed(0)}% CxP vencidas. ${formatCompactCurrency(overdueAmount)} en mora. Revisar aging y gestión de cobro.` });
-  if (dsoProxy > 45) insights.push({ type: 'risk', text: `KPI-01 DSO proxy: ${dsoProxy.toFixed(0)} días. R7: Conciliación manual lenta — considerar matching semi-automático (FR-04).` });
-  else if (dsoProxy > 0) insights.push({ type: 'insight', text: `KPI-01 DSO proxy: ${dsoProxy.toFixed(0)} días promedio de vencimiento.` });
-  if (ratio < 1) insights.push({ type: 'risk', text: `Déficit de cashflow: CxP (${formatCompactCurrency(totalCxP)}) > Ingresos (${formatCompactCurrency(totalInflows)}). Gap: ${formatCompactCurrency(totalCxP - totalInflows)}.` });
-  else if (ratio < 1.5) insights.push({ type: 'risk', text: `Ratio cobertura ajustado: ${ratio.toFixed(2)}x. Margen limitado para imprevistos.` });
-  else insights.push({ type: 'insight', text: `Cobertura saludable: ${ratio.toFixed(2)}x (Ingresos / CxP).` });
+  const insights: { type: 'insight' | 'risk' | 'action'; text: string; textEn: string }[] = [];
+  if (overdueRate > 30) insights.push({ type: 'risk', text: `KPI-06 Mora: ${overdueRate.toFixed(0)}% de CxP vencidas (${overdueCxP.length} items = ${formatCompactCurrency(overdueAmount)}). R4: Reacción tardía — activar micro-ciclo diario.`, textEn: `KPI-06 Arrears: ${overdueRate.toFixed(0)}% of AP overdue (${overdueCxP.length} items = ${formatCompactCurrency(overdueAmount)}). R4: Slow reaction — activate daily micro-cycle.` });
+  else if (overdueRate > 10) insights.push({ type: 'risk', text: `${overdueRate.toFixed(0)}% CxP vencidas. ${formatCompactCurrency(overdueAmount)} en mora.`, textEn: `${overdueRate.toFixed(0)}% AP overdue. ${formatCompactCurrency(overdueAmount)} in arrears.` });
+  if (dsoProxy > 45) insights.push({ type: 'risk', text: `KPI-01 DSO proxy: ${dsoProxy.toFixed(0)} días. R7: Conciliación manual lenta.`, textEn: `KPI-01 DSO proxy: ${dsoProxy.toFixed(0)} days. R7: Slow manual reconciliation.` });
+  else if (dsoProxy > 0) insights.push({ type: 'insight', text: `KPI-01 DSO proxy: ${dsoProxy.toFixed(0)} días promedio de vencimiento.`, textEn: `KPI-01 DSO proxy: ${dsoProxy.toFixed(0)} days average maturity.` });
+  if (ratio < 1) insights.push({ type: 'risk', text: `Déficit de cashflow: CxP (${formatCompactCurrency(totalCxP)}) > Ingresos (${formatCompactCurrency(totalInflows)}). Gap: ${formatCompactCurrency(totalCxP - totalInflows)}.`, textEn: `Cashflow deficit: AP (${formatCompactCurrency(totalCxP)}) > Income (${formatCompactCurrency(totalInflows)}). Gap: ${formatCompactCurrency(totalCxP - totalInflows)}.` });
+  else if (ratio < 1.5) insights.push({ type: 'risk', text: `Ratio cobertura ajustado: ${ratio.toFixed(2)}x. Margen limitado.`, textEn: `Tight coverage ratio: ${ratio.toFixed(2)}x. Limited margin.` });
+  else insights.push({ type: 'insight', text: `Cobertura saludable: ${ratio.toFixed(2)}x (Ingresos / CxP).`, textEn: `Healthy coverage: ${ratio.toFixed(2)}x (Income / AP).` });
   const agingHigh = agingBuckets.filter(b => b.label !== '0-30').reduce((s, b) => s + b.monto, 0);
-  if (agingHigh > totalCxP * 0.3 && totalCxP > 0) insights.push({ type: 'risk', text: `KPI-05 Aging: ${((agingHigh / totalCxP) * 100).toFixed(0)}% de CxP con >30 días. R4/R6: Degradación de cartera — escalar top morosos.` });
+  if (agingHigh > totalCxP * 0.3 && totalCxP > 0) insights.push({ type: 'risk', text: `KPI-05 Aging: ${((agingHigh / totalCxP) * 100).toFixed(0)}% de CxP con >30 días.`, textEn: `KPI-05 Aging: ${((agingHigh / totalCxP) * 100).toFixed(0)}% of AP over 30 days.` });
   if (topProv.length >= 3 && totalCxP > 0) {
     const top3 = topProv.slice(0, 3).reduce((s, p) => s + p.total, 0) / totalCxP * 100;
-    if (top3 > 50) insights.push({ type: 'risk', text: `Concentración CxP: Top 3 proveedores = ${top3.toFixed(0)}%. R10: Dependencia.` });
+    if (top3 > 50) insights.push({ type: 'risk', text: `Concentración CxP: Top 3 proveedores = ${top3.toFixed(0)}%.`, textEn: `AP concentration: Top 3 suppliers = ${top3.toFixed(0)}%.` });
   }
   if (buBreakdown.some(b => b.neto < 0)) {
     const neg = buBreakdown.filter(b => b.neto < 0);
-    insights.push({ type: 'action', text: `${neg.length} BU(s) con cashflow negativo: ${neg.map(b => `${b.bu} (${formatCompactCurrency(b.neto)})`).join(', ')}.` });
+    insights.push({ type: 'action', text: `${neg.length} BU(s) con cashflow negativo: ${neg.map(b => `${b.bu} (${formatCompactCurrency(b.neto)})`).join(', ')}.`, textEn: `${neg.length} BU(s) with negative cashflow: ${neg.map(b => `${b.bu} (${formatCompactCurrency(b.neto)})`).join(', ')}.` });
   }
-  if (cxpAll.length === 0 && flujoAll.length === 0) insights.push({ type: 'action', text: 'Sin datos. Ingesta archivos Excel en Fuentes de Datos.' });
+  if (cxpAll.length === 0 && flujoAll.length === 0) insights.push({ type: 'action', text: 'Sin datos. Ingesta archivos Excel en Fuentes de Datos.', textEn: 'No data. Upload Excel files in Data Sources.' });
 
   const hasData = cxpAll.length > 0 || flujoAll.length > 0;
 
@@ -266,12 +348,29 @@ export function CashflowDashboard() {
             {/* BU Filter */}
             <div className="flex items-center gap-1.5">
               <Filter className="w-3.5 h-3.5 text-gray-400" />
-              <select value={buFilter} onChange={e => setBuFilter(e.target.value)}
+              <select value={buFilter} onChange={e => { setBuFilter(e.target.value); setNegocioFilter('all'); }}
                 className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700 focus:ring-1 focus:ring-[#1A4A28] focus:border-[#1A4A28]">
                 <option value="all">Todas las BU</option>
                 {allBUs.map(bu => <option key={bu} value={bu}>{bu}</option>)}
               </select>
             </div>
+            {/* Negocio Filter */}
+            {allNegocios.length > 0 && (
+              <select value={negocioFilter} onChange={e => setNegocioFilter(e.target.value)}
+                className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700 focus:ring-1 focus:ring-[#1A4A28] focus:border-[#1A4A28]">
+                <option value="all">Todo Negocio</option>
+                {allNegocios.map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            )}
+            {/* Provider Filter */}
+            <select value={provFilter} onChange={e => setProvFilter(e.target.value)}
+              className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700 focus:ring-1 focus:ring-[#1A4A28] focus:border-[#1A4A28] max-w-[180px]">
+              <option value="all">Todos Proveedores</option>
+              {allProviders.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+            {provFilter !== 'all' && provCurrencyMap[provFilter] && (
+              <Badge variant="info" className="text-[10px]">{provCurrencyMap[provFilter]}</Badge>
+            )}
             {/* Period */}
             <div className="flex bg-gray-100 rounded-lg p-0.5">
               {(Object.keys(PERIOD_LABELS) as TimePeriod[]).map(p => (
@@ -474,7 +573,14 @@ export function CashflowDashboard() {
 
             {/* CxP detail table */}
             <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><AlertTriangle className="w-4 h-4 text-orange-500" />Detalle CxP — Pagos Prioritarios ($){buFilter !== 'all' && <Badge variant="info">{buFilter}</Badge>}</CardTitle></CardHeader>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2 text-base"><AlertTriangle className="w-4 h-4 text-orange-500" />Detalle CxP — Pagos Prioritarios ($){buFilter !== 'all' && <Badge variant="info">{buFilter}</Badge>}{provFilter !== 'all' && <Badge variant="secondary">{provFilter}</Badge>}</CardTitle>
+                  <button onClick={exportCxPToXLSX} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1A4A28] bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors" title="Exportar CxP a Excel">
+                    <Download className="w-3.5 h-3.5" /> Exportar XLSX
+                  </button>
+                </div>
+              </CardHeader>
               <CardContent>
                 {cxp.length > 0 ? (
                   <div className="overflow-x-auto">
@@ -550,9 +656,85 @@ export function CashflowDashboard() {
               </CardContent>
             </Card>
 
-            {/* Process-Gap Narrative */}
+            {/* ── Egresos por Negocio (sub-BU) ──────────────────────────────── */}
+            {negocioBreakdown.length > 1 && (
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Building2 className="w-4 h-4 text-[#1A4A28]" />Egresos por Negocio (Sub-BU){buFilter !== 'all' && <Badge variant="info">{buFilter}</Badge>}</CardTitle></CardHeader>
+                <CardContent>
+                  <ResponsiveContainer width="100%" height={260}>
+                    <BarChart data={negocioBreakdown.slice(0, 12).map(n => ({ ...n, negocio: n.negocio.length > 20 ? n.negocio.slice(0, 17) + '...' : n.negocio }))} layout="vertical">
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      <XAxis type="number" stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
+                      <YAxis type="category" dataKey="negocio" stroke="#9ca3af" fontSize={9} width={140} />
+                      <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
+                      <Bar dataKey="monto" fill={ARA_COLORS.primary} name="Egresos $" radius={[0, 4, 4, 0]} barSize={16}
+                        label={{ position: 'right', formatter: (v: number) => `(${negocioBreakdown.find(n => n.monto === v)?.count || 0})`, fontSize: 9, fill: '#9ca3af' }} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* ── Control Presupuestario & Egresos ─────────────────────────── */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Budget control */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-base"><Target className="w-4 h-4 text-[#1A4A28]" />Control Presupuestario — Egresos vs Meta</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center gap-3 mb-4">
+                    <label className="text-xs text-gray-500 whitespace-nowrap">Meta mensual ($):</label>
+                    <input type="number" value={budgetTarget || ''} onChange={e => { const v = parseFloat(e.target.value) || 0; setBudgetTarget(v); localStorage.setItem('cashflow_budget_target', String(v)); }}
+                      className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 w-32 text-right" placeholder="Ej: 500000" />
+                    {budgetTarget > 0 && <Badge variant="info">{formatCompactCurrency(budgetTarget)}/mes</Badge>}
+                  </div>
+                  {budgetVsReal.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={220}>
+                      <ComposedChart data={budgetVsReal}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="label" stroke="#9ca3af" fontSize={10} />
+                        <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
+                        <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <Bar dataKey="total" name="Egreso Real $" radius={[4, 4, 0, 0]}>
+                          {budgetVsReal.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
+                        </Bar>
+                        <ReferenceLine y={budgetTarget} stroke={ARA_COLORS.gold} strokeDasharray="4 4" label={{ value: 'Meta', position: 'right', fontSize: 10 }} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  ) : <p className="text-xs text-gray-400 text-center py-8">Define una meta mensual para ver el análisis presupuestario.</p>}
+                </CardContent>
+              </Card>
+
+              {/* Expense control — trend */}
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><TrendingDown className="w-4 h-4 text-red-500" />Tendencia de Egresos Mensual ($)</CardTitle></CardHeader>
+                <CardContent>
+                  {egresosTrend.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={260}>
+                      <ComposedChart data={egresosTrend}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="label" stroke="#9ca3af" fontSize={10} />
+                        <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
+                        <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
+                        <Bar dataKey="total" fill={ARA_COLORS.red} name="Egresos $" radius={[4, 4, 0, 0]} opacity={0.7} />
+                        <Line type="monotone" dataKey="total" stroke={ARA_COLORS.orange} strokeWidth={2} dot={{ r: 3 }} name="Tendencia" />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  ) : <EmptyState text="Sin datos de egresos." />}
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Process-Gap Narrative with Lang Toggle */}
             <Card className="border-l-4 border-l-[#1A4A28]">
-              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Lightbulb className="w-4 h-4 text-[#C9A84C]" />Hallazgos de Proceso — KPIs & Riesgos (AS-IS)</CardTitle></CardHeader>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2 text-base"><Lightbulb className="w-4 h-4 text-[#C9A84C]" />{lang === 'es' ? 'Hallazgos de Proceso — KPIs & Riesgos' : 'Process Findings — KPIs & Risks'}</CardTitle>
+                  <button onClick={toggleLang} className="px-2.5 py-1 text-xs font-semibold border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">{lang === 'es' ? 'EN' : 'ES'}</button>
+                </div>
+              </CardHeader>
               <CardContent>
                 {insights.length > 0 ? (
                   <div className="space-y-2.5">
@@ -564,13 +746,17 @@ export function CashflowDashboard() {
                           {item.type === 'insight' && <TrendingUp className="w-4 h-4 text-emerald-600" />}
                         </span>
                         <div>
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{item.type === 'risk' ? 'Riesgo Proceso' : item.type === 'action' ? 'Acción' : 'Hallazgo'}</span>
-                          <p className="text-sm text-gray-800 mt-0.5">{item.text}</p>
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                            {lang === 'es'
+                              ? (item.type === 'risk' ? 'Riesgo Proceso' : item.type === 'action' ? 'Acción' : 'Hallazgo')
+                              : (item.type === 'risk' ? 'Process Risk' : item.type === 'action' ? 'Action' : 'Finding')}
+                          </span>
+                          <p className="text-sm text-gray-800 mt-0.5">{lang === 'es' ? item.text : item.textEn}</p>
                         </div>
                       </div>
                     ))}
                   </div>
-                ) : <p className="text-sm text-gray-400 text-center py-6">Insights basados en KPIs de proceso se generan al cargar datos.</p>}
+                ) : <p className="text-sm text-gray-400 text-center py-6">{lang === 'es' ? 'Insights basados en KPIs de proceso se generan al cargar datos.' : 'Process KPI insights will appear once data is loaded.'}</p>}
               </CardContent>
             </Card>
 
@@ -580,6 +766,8 @@ export function CashflowDashboard() {
                 <span>{cxp.length} CxP</span><span>{flujo.length} ingresos/operaciones</span>
                 <span>{projection.length} meses proyección</span>
                 <span>BU: {buFilter === 'all' ? 'Todas' : buFilter}</span>
+                {provFilter !== 'all' && <span>Prov: {provFilter}</span>}
+                {negocioFilter !== 'all' && <span>Neg: {negocioFilter}</span>}
                 <span>Divisa: $ USD</span>
               </div>
               <span>CVE Treasury Copilot — ARA Group</span>

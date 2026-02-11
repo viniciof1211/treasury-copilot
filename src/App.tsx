@@ -5,6 +5,8 @@ import { Dashboard } from './pages/Dashboard';
 import { CashflowDashboard } from './pages/CashflowDashboard';
 import { CreditDashboard } from './pages/CreditDashboard';
 import { ComprasDashboard } from './pages/ComprasDashboard';
+import { IngresosDashboard } from './pages/IngresosDashboard';
+import { BoardPresentation } from './pages/BoardPresentation';
 import { Chat } from './pages/Chat';
 import { DataSources } from './pages/DataSources';
 import { Projects } from './pages/Projects';
@@ -24,6 +26,8 @@ function App() {
           <Route path="/cashflow" element={<CashflowDashboard />} />
           <Route path="/credito" element={<CreditDashboard />} />
           <Route path="/compras" element={<ComprasDashboard />} />
+          <Route path="/ingresos" element={<IngresosDashboard />} />
+          <Route path="/board" element={<BoardPresentation />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/data" element={<DataSources />} />
           <Route path="/projects" element={<Projects />} />
