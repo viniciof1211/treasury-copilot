@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Landmark, Layers, Activity, Percent, BanknoteIcon, DollarSign,
   CalendarDays, RefreshCw, BarChart3, TrendingUp, TrendingDown, AlertTriangle, Lightbulb,
-  Filter, CheckCircle2,
+  Filter, CheckCircle2, ShieldCheck, Target,
 } from 'lucide-react';
 import { Layout } from '../components/layout/Layout';
 import { KPICard } from '../components/dashboard/KPICard';
@@ -39,8 +39,9 @@ const CREDIT_FIELDS: FieldDef[] = [
 ];
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
-  PieChart, Pie, Cell, ComposedChart, Line, Area,
+  PieChart, Pie, Cell, ComposedChart, Line, Area, AreaChart, ReferenceLine,
 } from 'recharts';
+import { FilterableTable, type ColumnDef } from '../components/ui/FilterableTable';
 
 const TIPO_COLORS: Record<string, string> = { 'Largo Plazo': '#1A4A28', 'Capital Trabajo': '#C9A84C', 'Tarjeta': '#3B82F6' };
 const CREDIT_COLORS = ['#1A4A28', '#2D6A3F', '#C9A84C', '#3B82F6', '#8B5CF6', '#EC4899', '#F59E0B', '#EF4444', '#06B6D4', '#84CC16'];
@@ -86,7 +87,7 @@ export function CreditDashboard() {
 
   const cutoff = getDateCutoff(period);
   const flujo = useMemo(() => {
-    let d = flujoAll;
+    let d = flujoAll.filter(r => r.operacion && String(r.operacion).trim() !== '');
     if (cutoff) d = d.filter(r => (r.vencimiento || r.created_at) >= cutoff);
     if (bankFilter !== 'all') d = d.filter(r => r.banco === bankFilter);
     return d;
@@ -220,7 +221,70 @@ export function CreditDashboard() {
     return Object.values(m);
   }, [flujo]);
 
-  // (Removed: byCompania — "Distribución de Cuotas por Compañía")
+  // ── Predictive Analytics ─────────────────────────────────────────────────────
+
+  // P1: Interest Rate Efficiency — interest/principal ratio by bank
+  const interestEfficiency = useMemo(() => {
+    return bancoComp.map(b => ({
+      ...b,
+      intRate: b.principal > 0 ? (b.intereses / b.principal) * 100 : 0,
+      banco: b.banco.length > 15 ? b.banco.slice(0, 12) + '...' : b.banco,
+    })).filter(b => b.principal > 0);
+  }, [bancoComp]);
+
+  // P2: Debt Concentration Risk — Herfindahl index by bank
+  const debtConcentration = useMemo(() => {
+    if (bancoComp.length === 0 || totalSaldo === 0) return { hhi: 0, data: [] as { banco: string; share: number; saldo: number }[] };
+    let hhi = 0;
+    const data = bancoComp.map(b => {
+      const share = (b.saldo / totalSaldo) * 100;
+      hhi += (share / 100) ** 2;
+      return { banco: b.banco.length > 15 ? b.banco.slice(0, 12) + '...' : b.banco, share, saldo: b.saldo };
+    });
+    return { hhi: hhi * 10000, data };
+  }, [bancoComp, totalSaldo]);
+
+  // P3: Maturity Wall — upcoming debt maturities by quarter
+  const maturityWall = useMemo(() => {
+    const q: Record<string, { quarter: string; lp: number; cp: number; total: number }> = {};
+    flujo.forEach(r => {
+      const d = r.vencimiento || r.created_at || '';
+      if (!d) return;
+      const yr = d.slice(0, 4);
+      const mo = parseInt(d.slice(5, 7));
+      const qtr = `${yr}-Q${Math.ceil(mo / 3)}`;
+      if (!q[qtr]) q[qtr] = { quarter: qtr, lp: 0, cp: 0, total: 0 };
+      const amt = asUSD(r, 'cuota');
+      if (r.tipo === 'Largo Plazo') q[qtr].lp += amt;
+      else q[qtr].cp += amt;
+      q[qtr].total += amt;
+    });
+    return Object.values(q).sort((a, b) => a.quarter.localeCompare(b.quarter));
+  }, [flujo, asUSD]);
+
+  // P4: Amortization Velocity — projected months to full payoff
+  const amortVelocity = useMemo(() => {
+    if (capEvol.length < 2) return [] as (typeof capEvol[0] & { remaining: number; monthsToPayoff: number })[];
+    let remaining = totalSaldo;
+    return capEvol.map(m => {
+      remaining -= m.principal;
+      const avgMonthlyPay = m.principal > 0 ? m.principal : 1;
+      const monthsToPayoff = remaining > 0 ? remaining / avgMonthlyPay : 0;
+      return { ...m, remaining: Math.max(0, remaining), monthsToPayoff: Math.min(monthsToPayoff, 120) };
+    });
+  }, [capEvol, totalSaldo]);
+
+  // ── FilterableTable column defs ─────────────────────────────────────────────
+  const creditColumns: ColumnDef<FlujoItem>[] = useMemo(() => [
+    { key: 'operacion', header: 'Operación', render: (r) => <span className="font-medium text-gray-900 max-w-[180px] truncate block" title={r.operacion}>{r.operacion || '—'}</span>, filterType: 'text' },
+    { key: 'compania', header: 'Compañía', render: (r) => <span className="text-gray-600">{r.compania || '—'}</span>, filterType: 'select' },
+    { key: 'banco', header: 'Banco', render: (r) => <span className="text-gray-600">{r.banco || '—'}</span>, filterType: 'select' },
+    { key: 'tipo', header: 'Tipo', render: (r) => <Badge variant={r.tipo === 'Largo Plazo' ? 'default' : r.tipo === 'Capital Trabajo' ? 'warning' : 'info'}>{r.tipo || '—'}</Badge>, filterType: 'select' },
+    { key: 'saldo_original', header: 'Saldo Original', align: 'right', render: (r) => <span className="font-semibold tabular-nums">{formatCurrency(termAmount(r, 'saldo_original'), termCurrency(r))}</span>, accessor: (r) => asUSD(r, 'saldo_original') },
+    { key: 'cuota', header: 'Cuota', align: 'right', render: (r) => <span className="tabular-nums">{formatCurrency(termAmount(r, 'cuota'), termCurrency(r))}</span>, accessor: (r) => asUSD(r, 'cuota') },
+    { key: 'vencimiento', header: 'Vencimiento', render: (r) => { const exp = r.vencimiento && new Date(r.vencimiento) < now; return <span className={exp ? 'text-red-600 font-bold' : 'text-gray-600'}>{r.vencimiento ? formatDate(r.vencimiento) : '—'}{exp && <span className="ml-1 text-[8px] bg-red-100 text-red-700 px-1 rounded">VENCIDO</span>}</span>; }, accessor: (r) => r.vencimiento || '' },
+    { key: 'moneda', header: 'Moneda', render: (r) => <Badge variant={termCurrency(r) === 'USD' ? 'info' : 'default'}>{termCurrency(r)}</Badge>, filterType: 'select', accessor: (r) => termCurrency(r) },
+  ], [now, termAmount, termCurrency, asUSD]);
 
   // ── Insights ───────────────────────────────────────────────────────────────
   const insights: { type: 'insight' | 'risk' | 'action'; text: string }[] = [];
@@ -435,41 +499,129 @@ export function CreditDashboard() {
               </Card>
             </div>
 
-            {/* Detail table */}
+            {/* Detail table with column filters */}
             <Card>
               <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Layers className="w-4 h-4 text-[#1A4A28]" />Detalle de Operaciones de Crédito</CardTitle></CardHeader>
               <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead><tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wider">
-                      <th className="pb-2 pr-3">Operación</th><th className="pb-2 pr-3">Compañía</th><th className="pb-2 pr-3">Banco</th>
-                      <th className="pb-2 pr-3">Tipo</th><th className="pb-2 pr-3 text-right">Saldo Original</th>
-                      <th className="pb-2 pr-3 text-right">Cuota</th><th className="pb-2 pr-3">Vencimiento</th><th className="pb-2">Moneda</th>
-                    </tr></thead>
-                    <tbody className="divide-y divide-gray-50">
-                      {uniqueOps.slice(0, 25).map((op, idx) => {
-                        const expired = op.vencimiento && new Date(op.vencimiento) < now;
-                        return (
-                          <tr key={idx} className="hover:bg-gray-50/50 cursor-pointer" onDoubleClick={() => setDetailRecord(op as unknown as Record<string, unknown>)} title="Doble clic para ver/editar detalle">
-                            <td className="py-2 pr-3 font-medium text-gray-900 text-xs max-w-[180px] truncate" title={op.operacion}>{op.operacion || '—'}</td>
-                            <td className="py-2 pr-3 text-gray-600 text-xs">{op.compania || '—'}</td>
-                            <td className="py-2 pr-3 text-gray-600 text-xs">{op.banco || '—'}</td>
-                            <td className="py-2 pr-3"><Badge variant={op.tipo === 'Largo Plazo' ? 'default' : op.tipo === 'Capital Trabajo' ? 'warning' : 'info'}>{op.tipo || '—'}</Badge></td>
-                            <td className="py-2 pr-3 text-right font-semibold tabular-nums text-xs">{formatCurrency(termAmount(op, 'saldo_original'), termCurrency(op))}</td>
-                            <td className="py-2 pr-3 text-right tabular-nums text-xs">{formatCurrency(termAmount(op, 'cuota'), termCurrency(op))}</td>
-                            <td className={`py-2 pr-3 text-xs ${expired ? 'text-red-600 font-bold' : 'text-gray-600'}`}>{op.vencimiento ? formatDate(op.vencimiento) : '—'}{expired && <span className="ml-1 text-[8px] bg-red-100 text-red-700 px-1 rounded">VENCIDO</span>}</td>
-                            <td className="py-2 text-xs text-gray-500"><Badge variant={termCurrency(op) === 'USD' ? 'info' : 'default'}>{termCurrency(op)}</Badge></td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                  {uniqueOps.length > 25 && <p className="text-xs text-gray-400 mt-2 text-center">Mostrando 25 de {uniqueOps.length}.</p>}
-                  <p className="text-xs text-gray-400 mt-1 text-center italic">Doble clic en una fila para ver/editar detalle completo</p>
-                  <p className="text-xs text-gray-400 mt-1 text-center">Convención: Largo Plazo → USD ($) · Corto Plazo / Capital Trabajo → CRC (₡)</p>
-                </div>
+                <FilterableTable<FlujoItem>
+                  data={uniqueOps}
+                  columns={creditColumns}
+                  maxRows={30}
+                  onRowDoubleClick={(item) => setDetailRecord(item as unknown as Record<string, unknown>)}
+                  emptyText="Sin operaciones de crédito."
+                />
+                <p className="text-xs text-gray-400 mt-1 text-center">Convención: Largo Plazo → USD ($) · Corto Plazo / Capital Trabajo → CRC (₡)</p>
               </CardContent>
             </Card>
+
+            {/* ── Predictive Financial Treasury Analytics ─────────────── */}
+            <div className="border-t border-gray-200 pt-6 mt-2">
+              <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+                <Activity className="w-5 h-5 text-[#1A4A28]" />
+                Predictive Financial Treasury Analytics
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* P1: Interest Rate Efficiency */}
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Percent className="w-4 h-4 text-orange-500" />Eficiencia de Tasa de Interés por Banco</CardTitle></CardHeader>
+                <CardContent>
+                  {interestEfficiency.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={280}>
+                      <ComposedChart data={interestEfficiency}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="banco" stroke="#9ca3af" fontSize={9} />
+                        <YAxis yAxisId="left" stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
+                        <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" fontSize={10} tickFormatter={v => `${v}%`} />
+                        <Tooltip contentStyle={tooltipStyle} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <Bar yAxisId="left" dataKey="principal" fill={ARA_COLORS.primary} name="Principal $" radius={[3, 3, 0, 0]} opacity={0.7} />
+                        <Bar yAxisId="left" dataKey="intereses" fill={ARA_COLORS.orange} name="Intereses $" radius={[3, 3, 0, 0]} opacity={0.7} />
+                        <Line yAxisId="right" type="monotone" dataKey="intRate" stroke={ARA_COLORS.red} strokeWidth={2.5} dot={{ r: 4 }} name="Tasa Implícita %" />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  ) : <EmptyState text="Sin datos de intereses." />}
+                  <p className="text-[9px] text-gray-400 text-center mt-1">Tasa implícita = Intereses / Principal. Bancos con mayor tasa = oportunidad de renegociación</p>
+                </CardContent>
+              </Card>
+
+              {/* P2: Debt Concentration */}
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><ShieldCheck className="w-4 h-4 text-[#1A4A28]" />Índice de Concentración Bancaria (HHI: {debtConcentration.hhi.toFixed(0)})</CardTitle></CardHeader>
+                <CardContent>
+                  {debtConcentration.data.length > 0 ? (
+                    <>
+                      <ResponsiveContainer width="100%" height={200}>
+                        <PieChart>
+                          <Pie data={debtConcentration.data} cx="50%" cy="50%" innerRadius={40} outerRadius={75} paddingAngle={3} dataKey="saldo"
+                            label={({ banco, share }) => `${banco} ${share.toFixed(0)}%`} labelLine={false} style={{ fontSize: 8 }}>
+                            {debtConcentration.data.map((_, i) => <Cell key={i} fill={CREDIT_COLORS[i % CREDIT_COLORS.length]} />)}
+                          </Pie>
+                          <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div className="mt-2 text-center">
+                        <span className={`text-sm font-bold ${debtConcentration.hhi > 2500 ? 'text-red-600' : debtConcentration.hhi > 1500 ? 'text-amber-600' : 'text-green-600'}`}>
+                          {debtConcentration.hhi > 2500 ? 'Alta Concentración' : debtConcentration.hhi > 1500 ? 'Concentración Moderada' : 'Diversificado'}
+                        </span>
+                        <p className="text-[9px] text-gray-400 mt-1">HHI &lt; 1500 = diversificado · 1500-2500 = moderado · &gt; 2500 = concentrado</p>
+                      </div>
+                    </>
+                  ) : <EmptyState text="Sin datos bancarios." />}
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* P3: Maturity Wall */}
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><CalendarDays className="w-4 h-4 text-[#1A4A28]" />Muro de Vencimientos por Trimestre ($)</CardTitle></CardHeader>
+                <CardContent>
+                  {maturityWall.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={280}>
+                      <ComposedChart data={maturityWall}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="quarter" stroke="#9ca3af" fontSize={9} />
+                        <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
+                        <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <Bar dataKey="lp" stackId="a" fill={ARA_COLORS.primary} name="Largo Plazo $" />
+                        <Bar dataKey="cp" stackId="a" fill={ARA_COLORS.gold} name="Corto Plazo $" radius={[3, 3, 0, 0]} />
+                        <Line type="monotone" dataKey="total" stroke={ARA_COLORS.red} strokeWidth={2} dot={{ r: 3 }} name="Total $" />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  ) : <EmptyState text="Sin datos de vencimientos." />}
+                  <p className="text-[9px] text-gray-400 text-center mt-1">Concentración de vencimientos por trimestre — picos = riesgo de refinanciamiento</p>
+                </CardContent>
+              </Card>
+
+              {/* P4: Amortization Velocity */}
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Target className="w-4 h-4 text-[#1A4A28]" />Velocidad de Amortización</CardTitle></CardHeader>
+                <CardContent>
+                  {amortVelocity.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={280}>
+                      <ComposedChart data={amortVelocity}>
+                        <defs>
+                          <linearGradient id="remGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={ARA_COLORS.blue} stopOpacity={0.2} /><stop offset="95%" stopColor={ARA_COLORS.blue} stopOpacity={0} /></linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="label" stroke="#9ca3af" fontSize={9} />
+                        <YAxis yAxisId="left" stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
+                        <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" fontSize={10} />
+                        <Tooltip contentStyle={tooltipStyle} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <Area yAxisId="left" type="monotone" dataKey="remaining" stroke={ARA_COLORS.blue} strokeWidth={2} fill="url(#remGrad)" name="Deuda Restante $" />
+                        <Bar yAxisId="left" dataKey="principal" fill={ARA_COLORS.primary} name="Amortización $" radius={[2, 2, 0, 0]} opacity={0.6} />
+                        <Line yAxisId="right" type="monotone" dataKey="monthsToPayoff" stroke={ARA_COLORS.red} strokeWidth={1.5} strokeDasharray="5 5" dot={false} name="Meses para Payoff" />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  ) : <EmptyState text="Sin datos de amortización." />}
+                  <p className="text-[9px] text-gray-400 text-center mt-1">Deuda restante vs velocidad de pago — línea roja = meses estimados para liquidar</p>
+                </CardContent>
+              </Card>
+            </div>
 
             {/* Narrative */}
             <Card className="border-l-4 border-l-[#1A4A28]">

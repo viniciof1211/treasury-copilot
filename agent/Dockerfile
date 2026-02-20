@@ -14,7 +14,9 @@ COPY src/ ./src/
 ENV VITE_AGENT_URL=""
 ENV VITE_SUPABASE_URL="https://aanhzgezgyawitpvwrcw.supabase.co"
 ENV VITE_SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFhbmh6Z2V6Z3lhd2l0cHZ3cmN3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA0MzU4MDksImV4cCI6MjA4NjAxMTgwOX0.5OLuTL1u9KW6kslGOLoKGNhDyEs09-F9ojzGTLyKjPU"
-RUN npm run build
+# Force rebuild with timestamp
+ARG BUILD_DATE=2026-02-17-v3
+RUN echo "Build date: $BUILD_DATE" && npm run build
 
 # ---- Stage 2: Python backend ----
 FROM python:3.11-slim
