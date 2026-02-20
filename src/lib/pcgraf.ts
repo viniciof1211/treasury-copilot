@@ -91,4 +91,41 @@ export async function pcgrafTables(database?: string): Promise<PcGrafTablesResul
   }
 }
 
+/**
+ * Create an immutable backup of PcGraf data before curation/sync.
+ */
+export async function pcgrafBackup(params: {
+  database?: string;
+  table?: string;
+  sql?: string;
+  backup_type?: string;
+  user?: string;
+}): Promise<{ status?: string; backup_id?: string; row_count?: number; checksum?: string; error?: string }> {
+  try {
+    const res = await fetch(`${AGENT_BASE}/pcgraf/backup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    return await res.json();
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+/**
+ * List existing PcGraf backups.
+ */
+export async function pcgrafBackupList(): Promise<{ backups: Array<{
+  id: string; backup_type: string; source_database: string; source_table: string;
+  row_count: number; checksum: string; created_by: string; created_at: string;
+}> }> {
+  try {
+    const res = await fetch(`${AGENT_BASE}/pcgraf/backups`);
+    return await res.json();
+  } catch {
+    return { backups: [] };
+  }
+}
+
 export type { PcGrafQueryResult, PcGrafHealthResult, PcGrafTablesResult };

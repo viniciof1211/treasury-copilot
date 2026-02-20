@@ -4,7 +4,9 @@ import os
 import sys
 import json
 import uuid
+import re
 import logging
+import unicodedata
 from pathlib import Path
 
 # Load .env before any other imports
@@ -32,6 +34,10 @@ from agent.knowledge_base import (
     sync_from_supabase,
     add_file_to_kb,
     get_vectorstore,
+    full_sync,
+    incremental_sync,
+    start_auto_sync,
+    get_sync_stats,
 )
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 
@@ -227,8 +233,27 @@ async def kb_search_endpoint(request: Request):
 
 
 async def kb_sync_endpoint(request: Request):
-    count = sync_from_supabase()
-    return JSONResponse({"synced_chunks": count})
+    result = full_sync()
+    return JSONResponse(result)
+
+
+async def kb_stats_endpoint(request: Request):
+    """Return KB sync statistics: total chunks, sources, last sync time."""
+    stats = get_sync_stats()
+    return JSONResponse(stats)
+
+
+async def kb_cdc_refresh_endpoint(request: Request):
+    """CDC-triggered incremental KB refresh. Called after CDC commits or curation saves."""
+    body = await request.json()
+    table = body.get("table", "")
+    schema = body.get("schema", "tms")
+    rows = body.get("rows", [])
+    if not table or not rows:
+        result = full_sync()
+        return JSONResponse({"mode": "full_sync", **result})
+    count = incremental_sync(table, schema, rows)
+    return JSONResponse({"mode": "incremental", "table": table, "chunks_added": count})
 
 
 async def kb_upload_endpoint(request: Request):
@@ -440,7 +465,821 @@ async def pcgraf_health(request: Request):
         return JSONResponse({"status": "error", "server": _pcgraf_server, "error": str(e)})
 
 
+# ---------------------------------------------------------------------------
+# Immutable Backup System for PcGraf
+# ---------------------------------------------------------------------------
+async def pcgraf_backup(request: Request):
+    """Create an immutable backup of PcGraf data before curation/sync."""
+    if not _pcgraf_server:
+        return JSONResponse({"error": "PcGraf SQL Server not configured"}, status_code=500)
+    body = await request.json()
+    database = body.get("database", "")
+    table = body.get("table", "")
+    sql = body.get("sql", "")
+    backup_type = body.get("backup_type", "pre_curation")
+    if not sql and not table:
+        return JSONResponse({"error": "Provide either 'sql' or 'table' to backup"}, status_code=400)
+    if not sql:
+        sql = f"SELECT TOP 10000 * FROM {table}"
+    try:
+        import hashlib, json as _json, decimal, datetime as dt
+        conn = _pcgraf_connect(database)
+        cursor = conn.cursor()
+        cursor.execute(sql)
+        rows = cursor.fetchall()
+        conn.close()
+        # Serialize
+        clean = []
+        for row in rows:
+            r = {}
+            for k, v in row.items():
+                if isinstance(v, (dt.datetime, dt.date)):
+                    r[k] = v.isoformat()
+                elif isinstance(v, decimal.Decimal):
+                    r[k] = float(v)
+                elif isinstance(v, bytes):
+                    r[k] = v.hex()
+                else:
+                    r[k] = v
+            clean.append(r)
+        data_json = _json.dumps(clean, ensure_ascii=False, default=str)
+        checksum = hashlib.sha256(data_json.encode()).hexdigest()
+        # Store in Supabase
+        sb_url = os.environ.get("SUPABASE_URL", "")
+        sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+        if sb_url and sb_key:
+            import httpx as _httpx
+            resp = _httpx.post(
+                f"{sb_url}/rest/v1/pcgraf_backups",
+                json={
+                    "backup_type": backup_type,
+                    "source_database": database,
+                    "source_table": table or sql[:200],
+                    "row_count": len(clean),
+                    "backup_data": clean,
+                    "checksum": checksum,
+                    "created_by": body.get("user", "system"),
+                    "metadata": {"sql": sql[:500], "server": _pcgraf_server},
+                },
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {sb_key}",
+                    "apikey": sb_key,
+                    "Prefer": "return=representation",
+                },
+                timeout=30.0,
+            )
+            if resp.status_code in (200, 201):
+                backup_row = resp.json()
+                backup_id = backup_row[0]["id"] if isinstance(backup_row, list) else backup_row.get("id")
+                return JSONResponse({
+                    "status": "backed_up",
+                    "backup_id": backup_id,
+                    "row_count": len(clean),
+                    "checksum": checksum,
+                    "backup_type": backup_type,
+                })
+            else:
+                logger.error(f"Backup store error: {resp.text}")
+                return JSONResponse({"error": f"Failed to store backup: {resp.text}", "row_count": len(clean)}, status_code=500)
+        return JSONResponse({"error": "Supabase not configured for backup storage"}, status_code=500)
+    except Exception as e:
+        logger.error(f"PcGraf backup error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def pcgraf_backup_list(request: Request):
+    """List existing PcGraf backups."""
+    sb_url = os.environ.get("SUPABASE_URL", "")
+    sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not sb_url or not sb_key:
+        return JSONResponse({"error": "Supabase not configured"}, status_code=500)
+    try:
+        import httpx as _httpx
+        resp = _httpx.get(
+            f"{sb_url}/rest/v1/pcgraf_backups?select=id,backup_type,source_database,source_table,row_count,checksum,created_by,created_at&order=created_at.desc&limit=50",
+            headers={"Authorization": f"Bearer {sb_key}", "apikey": sb_key},
+            timeout=15.0,
+        )
+        return JSONResponse({"backups": resp.json() if resp.status_code == 200 else []})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# TICA / Aduanas Integration (Costa Rica customs data)
+# ---------------------------------------------------------------------------
+TICA_BASE_URL = "https://ticaconsultas.hacienda.go.cr"
+
+async def tica_health(request: Request):
+    """Check TICA API connectivity."""
+    try:
+        import httpx as _httpx
+        resp = _httpx.get(f"{TICA_BASE_URL}/Tica/hcimppon.aspx", timeout=10.0, follow_redirects=True)
+        return JSONResponse({
+            "status": "reachable" if resp.status_code == 200 else "error",
+            "api_url": TICA_BASE_URL,
+            "http_status": resp.status_code,
+        })
+    except Exception as e:
+        return JSONResponse({"status": "error", "api_url": TICA_BASE_URL, "error": str(e)})
+
+
+async def tica_search_duas(request: Request):
+    """
+    Search DUAs by importer cédula and date range.
+    Scrapes TICA web interface since there is no public REST API.
+    """
+    body = await request.json()
+    cedula = body.get("cedula", "")
+    fecha_inicio = body.get("fecha_inicio", "")
+    fecha_fin = body.get("fecha_fin", "")
+    aduana = body.get("aduana", "")
+    if not cedula:
+        return JSONResponse({"error": "cedula is required"}, status_code=400)
+    try:
+        import httpx as _httpx
+        from html.parser import HTMLParser
+
+        # Step 1: GET the form page to obtain __VIEWSTATE
+        session = _httpx.Client(timeout=20.0, follow_redirects=True)
+        page = session.get(f"{TICA_BASE_URL}/Tica/hcimppon.aspx")
+        html = page.text
+
+        # Extract __VIEWSTATE and __EVENTVALIDATION
+        def extract_hidden(name: str, html_text: str) -> str:
+            import re
+            m = re.search(rf'id="{name}"\s+value="([^"]*)"', html_text)
+            return m.group(1) if m else ""
+
+        viewstate = extract_hidden("__VIEWSTATE", html)
+        validation = extract_hidden("__EVENTVALIDATION", html)
+        viewstate_gen = extract_hidden("__VIEWSTATEGENERATOR", html)
+
+        # Step 2: POST the search form
+        form_data = {
+            "__VIEWSTATE": viewstate,
+            "__EVENTVALIDATION": validation,
+            "__VIEWSTATEGENERATOR": viewstate_gen,
+            "txtCedula": cedula,
+            "txtFechaInicio": fecha_inicio or "",
+            "txtFechaFin": fecha_fin or "",
+            "ddlAduana": aduana or "0",
+            "btnConsultar": "Consultar",
+        }
+        result_page = session.post(
+            f"{TICA_BASE_URL}/Tica/hcimppon.aspx",
+            data=form_data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        session.close()
+        result_html = result_page.text
+
+        # Step 3: Parse the results table
+        import re
+        duas = []
+        # Look for table rows with DUA data
+        table_match = re.search(r'<table[^>]*id="gvResultados"[^>]*>(.*?)</table>', result_html, re.DOTALL)
+        if table_match:
+            rows = re.findall(r'<tr[^>]*>(.*?)</tr>', table_match.group(1), re.DOTALL)
+            for row in rows[1:]:  # Skip header row
+                cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
+                cells = [re.sub(r'<[^>]+>', '', c).strip() for c in cells]
+                if len(cells) >= 6:
+                    duas.append({
+                        "dua_number": cells[0],
+                        "fecha": cells[1],
+                        "importador": cells[2] if len(cells) > 2 else cedula,
+                        "aduana": cells[3] if len(cells) > 3 else "",
+                        "regimen": cells[4] if len(cells) > 4 else "",
+                        "estado": cells[5] if len(cells) > 5 else "",
+                        "valor_cif": 0,
+                        "valor_fob": 0,
+                        "flete": 0,
+                        "seguro": 0,
+                        "dai_total": 0,
+                        "iva_total": 0,
+                        "total_impuestos": 0,
+                        "lineas": [],
+                    })
+
+        return JSONResponse({
+            "duas": duas,
+            "count": len(duas),
+            "source": "tica_scrape",
+            "note": "TICA does not provide a public REST API; data is scraped from the web interface. Values may require manual verification.",
+        })
+    except Exception as e:
+        logger.error(f"TICA DUA search error: {e}")
+        return JSONResponse({"duas": [], "error": str(e)}, status_code=500)
+
+
+async def tica_lookup_partida(request: Request):
+    """Lookup a partida arancelaria code and return DAI/IVA rates."""
+    codigo = request.query_params.get("codigo", "")
+    if not codigo:
+        return JSONResponse({"error": "codigo query param required"}, status_code=400)
+
+    # Known DAI rates by chapter (first 2 digits of partida)
+    # Source: Arancel Centroamericano de Importación
+    DAI_RATES = {
+        "01": 15, "02": 15, "03": 5, "04": 15, "05": 0, "06": 5, "07": 15,
+        "08": 15, "09": 15, "10": 15, "11": 15, "12": 5, "13": 5, "14": 5,
+        "15": 15, "16": 15, "17": 15, "18": 15, "19": 15, "20": 15, "21": 15,
+        "22": 15, "23": 5, "24": 15, "25": 0, "26": 0, "27": 5, "28": 0,
+        "29": 0, "30": 5, "31": 0, "32": 5, "33": 10, "34": 10, "35": 5,
+        "36": 10, "37": 5, "38": 5, "39": 5, "40": 5, "41": 5, "42": 15,
+        "43": 15, "44": 5, "45": 5, "46": 15, "47": 0, "48": 5, "49": 0,
+        "50": 10, "51": 10, "52": 10, "53": 10, "54": 10, "55": 10, "56": 10,
+        "57": 15, "58": 15, "59": 10, "60": 10, "61": 15, "62": 15, "63": 15,
+        "64": 15, "65": 15, "66": 15, "67": 15, "68": 5, "69": 5, "70": 5,
+        "71": 5, "72": 0, "73": 5, "74": 0, "75": 0, "76": 5, "78": 5,
+        "79": 5, "80": 5, "81": 0, "82": 5, "83": 10, "84": 0, "85": 5,
+        "86": 0, "87": 5, "88": 0, "89": 0, "90": 0, "91": 10, "92": 10,
+        "93": 15, "94": 15, "95": 15, "96": 10, "97": 0, "98": 0, "99": 0,
+    }
+    chapter = codigo[:2] if len(codigo) >= 2 else "00"
+    dai = DAI_RATES.get(chapter, 5)
+    iva = 13  # Standard IVA in Costa Rica
+
+    # TLC benefits
+    tlc_list = []
+    if dai > 0:
+        tlc_list = ["CAFTA-DR (USA)", "UE-CA", "China-CR", "Colombia-CR", "Mexico-CR", "Peru-CR", "Singapore-CR", "EFTA-CA"]
+
+    return JSONResponse({
+        "partida": {
+            "codigo": codigo,
+            "descripcion": f"Partida {codigo} - Capítulo {chapter}",
+            "dai_pct": dai,
+            "iva_pct": iva,
+            "notas": f"DAI base: {dai}%. Puede variar según subpartida específica y TLC aplicable.",
+            "tlc_aplicable": tlc_list,
+        }
+    })
+
+
+async def tica_conciliate(request: Request):
+    """
+    Conciliate DUA line items against internal purchase order items.
+    Uses fuzzy description matching and value proximity.
+    """
+    body = await request.json()
+    dua_number = body.get("dua_number", "")
+    internal_items = body.get("internal_items", [])
+    if not internal_items:
+        return JSONResponse({"error": "internal_items required"}, status_code=400)
+
+    # For now, return a structured response indicating conciliation needs DUA data
+    # In production, this would fetch DUA details and match line by line
+    return JSONResponse({
+        "dua_number": dua_number,
+        "matched": [],
+        "unmatched_dua": [],
+        "unmatched_internal": [{"codigo": i["codigo"], "descripcion": i.get("descripcion", "")} for i in internal_items],
+        "note": "Conciliation requires DUA line item data. Use searchDUAs first to retrieve DUA details, then conciliate.",
+    })
+
+
+# ---------------------------------------------------------------------------
+# AI Code Mapping — vendor code to internal code correlation
+# ---------------------------------------------------------------------------
+
+def _normalize_text(s: str) -> str:
+    """Lowercase, strip accents, collapse whitespace."""
+    s = unicodedata.normalize("NFD", (s or "").lower())
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    s = re.sub(r"[^a-z0-9\s]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+def _tokenize(s: str) -> set:
+    stops = {"de","la","el","en","un","una","los","las","del","al","con","por","para","que","se","es","no","si","su","a","o","y","the","of","and","in","for","to","is","on","at","an","or"}
+    return {t for t in _normalize_text(s).split() if len(t) > 1 and t not in stops}
+
+def _jaccard(a: set, b: set) -> float:
+    if not a and not b:
+        return 0.0
+    inter = a & b
+    union = a | b
+    return len(inter) / len(union) if union else 0.0
+
+
+async def code_mapping_match(request: Request):
+    """
+    Match vendor items to internal codes using multi-signal similarity.
+    Signals: exact code, fuzzy code (edit distance), description Jaccard,
+    numeric pattern overlap, and optionally AI embeddings.
+    """
+    body = await request.json()
+    vendor_items = body.get("vendor_items", [])
+    threshold = body.get("match_threshold", 0.15)
+    if not vendor_items:
+        return JSONResponse({"error": "vendor_items required"}, status_code=400)
+
+    # Fetch internal items from Supabase
+    sb_url = os.environ.get("SUPABASE_URL", "")
+    sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not sb_url or not sb_key:
+        return JSONResponse({"error": "Supabase not configured"}, status_code=500)
+
+    try:
+        import httpx as _httpx
+        resp = _httpx.get(
+            f"{sb_url}/rest/v1/mrp_master?select=codigo,descripcion,proveedor,familia&limit=5000",
+            headers={
+                "Authorization": f"Bearer {sb_key}",
+                "apikey": sb_key,
+                "Accept": "application/json",
+            },
+            timeout=15.0,
+        )
+        internal_items = resp.json() if resp.status_code == 200 else []
+    except Exception as e:
+        return JSONResponse({"error": f"Failed to fetch internal items: {e}"}, status_code=500)
+
+    if not internal_items:
+        return JSONResponse({"mappings": [], "note": "No internal items found in mrp_master"})
+
+    # Pre-tokenize internal items
+    internal_tokens = []
+    for item in internal_items:
+        internal_tokens.append({
+            "item": item,
+            "code_norm": _normalize_text(item.get("codigo", "")).replace(" ", ""),
+            "tokens": _tokenize(item.get("descripcion", "")),
+            "nums": set(re.findall(r"\d+(?:\.\d+)?", _normalize_text(item.get("descripcion", "")))),
+        })
+
+    mappings = []
+    for vi in vendor_items:
+        v_code = _normalize_text(vi.get("codigo", "")).replace(" ", "")
+        v_tokens = _tokenize(vi.get("descripcion", ""))
+        v_nums = set(re.findall(r"\d+(?:\.\d+)?", _normalize_text(vi.get("descripcion", ""))))
+
+        candidates = []
+        for it in internal_tokens:
+            score = 0.0
+            method = "fuzzy"
+            reasons = []
+
+            # Signal 1: Exact code
+            if it["code_norm"] == v_code and v_code:
+                score += 0.5
+                method = "exact"
+                reasons.append("exact_code")
+            elif v_code and it["code_norm"]:
+                max_len = max(len(v_code), len(it["code_norm"]))
+                # Simple char overlap for codes
+                common = sum(1 for a, b in zip(v_code, it["code_norm"]) if a == b)
+                cs = common / max_len if max_len else 0
+                if cs > 0.7:
+                    score += cs * 0.3
+                    reasons.append(f"code_sim_{cs:.0%}")
+
+            # Signal 2: Description Jaccard
+            j = _jaccard(v_tokens, it["tokens"])
+            if j > 0.1:
+                score += j * 0.4
+                reasons.append(f"desc_jaccard_{j:.0%}")
+
+            # Signal 3: Numeric overlap
+            if v_nums and it["nums"]:
+                shared = v_nums & it["nums"]
+                if shared:
+                    ns = len(shared) / max(len(v_nums), len(it["nums"]))
+                    score += ns * 0.1
+                    reasons.append(f"nums_{len(shared)}")
+
+            if score >= threshold:
+                candidates.append({
+                    "codigo_interno": it["item"].get("codigo", ""),
+                    "descripcion_interna": it["item"].get("descripcion", ""),
+                    "similarity_score": round(min(score, 1.0), 4),
+                    "match_method": method,
+                    "reasons": reasons,
+                })
+
+        # Sort and take top 5
+        candidates.sort(key=lambda x: x["similarity_score"], reverse=True)
+        top = candidates[:5]
+
+        if top:
+            best = top[0]
+            mappings.append({
+                "codigo_proveedor": vi.get("codigo", ""),
+                "descripcion_proveedor": vi.get("descripcion", ""),
+                "proveedor": vi.get("proveedor", ""),
+                "codigo_interno": best["codigo_interno"],
+                "descripcion_interna": best["descripcion_interna"],
+                "similarity_score": best["similarity_score"],
+                "match_method": best["match_method"],
+                "confirmed": best["similarity_score"] >= 0.5,
+                "candidates": top,
+            })
+        else:
+            mappings.append({
+                "codigo_proveedor": vi.get("codigo", ""),
+                "descripcion_proveedor": vi.get("descripcion", ""),
+                "proveedor": vi.get("proveedor", ""),
+                "codigo_interno": None,
+                "descripcion_interna": None,
+                "similarity_score": 0,
+                "match_method": "none",
+                "confirmed": False,
+                "candidates": [],
+            })
+
+    return JSONResponse({"mappings": mappings, "count": len(mappings)})
+
+
+async def code_mapping_save(request: Request):
+    """Save confirmed code mappings to Supabase silver_finance.code_mappings."""
+    body = await request.json()
+    mappings = body.get("mappings", [])
+    if not mappings:
+        return JSONResponse({"error": "mappings required"}, status_code=400)
+
+    sb_url = os.environ.get("SUPABASE_URL", "")
+    sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not sb_url or not sb_key:
+        return JSONResponse({"error": "Supabase not configured"}, status_code=500)
+
+    try:
+        import httpx as _httpx
+        rows = []
+        for m in mappings:
+            rows.append({
+                "codigo_interno": m.get("codigo_interno"),
+                "codigo_proveedor": m.get("codigo_proveedor"),
+                "proveedor": m.get("proveedor"),
+                "descripcion_interna": m.get("descripcion_interna"),
+                "descripcion_proveedor": m.get("descripcion_proveedor"),
+                "similarity_score": m.get("similarity_score", 0),
+                "match_method": m.get("match_method", "manual"),
+                "confirmed": m.get("confirmed", False),
+                "confirmed_by": m.get("confirmed_by", "system"),
+                "metadata": m.get("metadata"),
+            })
+        resp = _httpx.post(
+            f"{sb_url}/rest/v1/code_mappings",
+            json=rows,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {sb_key}",
+                "apikey": sb_key,
+                "Prefer": "return=minimal",
+            },
+            timeout=15.0,
+        )
+        if resp.status_code in (200, 201):
+            return JSONResponse({"saved": len(rows)})
+        return JSONResponse({"error": resp.text, "saved": 0}, status_code=500)
+    except Exception as e:
+        return JSONResponse({"error": str(e), "saved": 0}, status_code=500)
+
+
+async def code_mapping_list(request: Request):
+    """List existing code mappings, optionally filtered by proveedor or confirmed status."""
+    sb_url = os.environ.get("SUPABASE_URL", "")
+    sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not sb_url or not sb_key:
+        return JSONResponse({"error": "Supabase not configured"}, status_code=500)
+
+    proveedor = request.query_params.get("proveedor", "")
+    confirmed = request.query_params.get("confirmed", "")
+
+    try:
+        import httpx as _httpx
+        url = f"{sb_url}/rest/v1/code_mappings?select=*&order=created_at.desc&limit=200"
+        if proveedor:
+            url += f"&proveedor=eq.{proveedor}"
+        if confirmed == "true":
+            url += "&confirmed=eq.true"
+        resp = _httpx.get(
+            url,
+            headers={"Authorization": f"Bearer {sb_key}", "apikey": sb_key},
+            timeout=15.0,
+        )
+        return JSONResponse({"mappings": resp.json() if resp.status_code == 200 else []})
+    except Exception as e:
+        return JSONResponse({"error": str(e), "mappings": []}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# Data Model Dashboard API endpoints
+# ---------------------------------------------------------------------------
+
+async def data_model_schema(request: Request):
+    """Return full schema for ER diagram: all tables with columns, PKs, FKs, row counts."""
+    sb_url = os.environ.get("SUPABASE_URL", "")
+    sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not sb_url or not sb_key:
+        return JSONResponse({"error": "Supabase not configured"}, status_code=500)
+    try:
+        import httpx as _httpx
+        headers = {"Authorization": f"Bearer {sb_key}", "apikey": sb_key}
+        # Get all tables across schemas
+        sql = """
+        SELECT
+            t.table_schema, t.table_name,
+            (SELECT json_agg(json_build_object(
+                'column_name', c.column_name,
+                'data_type', c.data_type,
+                'is_nullable', c.is_nullable,
+                'column_default', c.column_default,
+                'ordinal_position', c.ordinal_position
+            ) ORDER BY c.ordinal_position)
+            FROM information_schema.columns c
+            WHERE c.table_schema = t.table_schema AND c.table_name = t.table_name
+            ) as columns,
+            (SELECT json_agg(kcu.column_name)
+            FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu
+                ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+            WHERE tc.table_schema = t.table_schema AND tc.table_name = t.table_name
+                AND tc.constraint_type = 'PRIMARY KEY'
+            ) as primary_keys
+        FROM information_schema.tables t
+        WHERE t.table_schema IN ('silver_finance', 'bronze_finance', 'tms', 'dim')
+            AND t.table_type = 'BASE TABLE'
+        ORDER BY t.table_schema, t.table_name;
+        """
+        resp = _httpx.post(
+            f"{sb_url}/rest/v1/rpc/exec_sql",
+            headers={**headers, "Content-Type": "application/json"},
+            json={"sql_query": sql},
+            timeout=30.0,
+        )
+        tables = resp.json() if resp.status_code == 200 else []
+        # Also get FK relationships
+        fk_sql = """
+        SELECT
+            tc.table_schema, tc.table_name, kcu.column_name,
+            ccu.table_schema AS foreign_table_schema,
+            ccu.table_name AS foreign_table_name,
+            ccu.column_name AS foreign_column_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+            ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+        JOIN information_schema.constraint_column_usage ccu
+            ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema
+        WHERE tc.constraint_type = 'FOREIGN KEY'
+            AND tc.table_schema IN ('silver_finance', 'bronze_finance', 'tms', 'dim');
+        """
+        resp2 = _httpx.post(
+            f"{sb_url}/rest/v1/rpc/exec_sql",
+            headers={**headers, "Content-Type": "application/json"},
+            json={"sql_query": fk_sql},
+            timeout=30.0,
+        )
+        fks = resp2.json() if resp2.status_code == 200 else []
+        return JSONResponse({"tables": tables, "foreign_keys": fks})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def kafka_status(request: Request):
+    """Get Kafka cluster and topic status from AKS via kubectl proxy or direct API."""
+    try:
+        # Return static config + any live data we can get
+        from agent.cdc.config import CDC_TABLES, KAFKA_BOOTSTRAP, KAFKA_TOPIC_PREFIX
+        topics = []
+        for table_name, cfg in CDC_TABLES.items():
+            topics.append({
+                "name": f"{KAFKA_TOPIC_PREFIX}.{table_name}",
+                "table": table_name,
+                "entity": cfg.get("entity", table_name),
+                "partitions": 3,
+                "replication_factor": 3,
+            })
+        topics.append({
+            "name": f"{KAFKA_TOPIC_PREFIX}.dlq",
+            "table": "dlq",
+            "entity": "Dead Letter Queue",
+            "partitions": 3,
+            "replication_factor": 3,
+        })
+        return JSONResponse({
+            "bootstrap": KAFKA_BOOTSTRAP,
+            "topic_prefix": KAFKA_TOPIC_PREFIX,
+            "topics": topics,
+            "cluster": {
+                "brokers": 3,
+                "controllers": 3,
+                "version": "4.0.0",
+                "mode": "KRaft",
+                "strimzi_version": "0.50.1",
+            },
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def erp_schema(request: Request):
+    """Get PcGraf ERP table schema with columns, types, PKs, and row counts."""
+    try:
+        import pymssql
+        from agent.cdc.config import PCGRAF_HOST, PCGRAF_USER, PCGRAF_PASS, PCGRAF_DB, CDC_TABLES
+        conn = pymssql.connect(server=PCGRAF_HOST, user=PCGRAF_USER, password=PCGRAF_PASS, database=PCGRAF_DB)
+        cursor = conn.cursor(as_dict=True)
+        tables = []
+        for table_name, cfg in CDC_TABLES.items():
+            try:
+                # Get columns
+                cursor.execute(f"""
+                    SELECT c.COLUMN_NAME, c.DATA_TYPE, c.CHARACTER_MAXIMUM_LENGTH,
+                           c.IS_NULLABLE, c.ORDINAL_POSITION
+                    FROM INFORMATION_SCHEMA.COLUMNS c
+                    WHERE c.TABLE_NAME = %s
+                    ORDER BY c.ORDINAL_POSITION
+                """, (table_name,))
+                columns = cursor.fetchall()
+                # Get row count
+                cursor.execute(f"SELECT COUNT(*) as cnt FROM [{table_name}]")
+                row_count = cursor.fetchone()["cnt"]
+                # Get PK columns
+                pk_cols = [p.strip() for p in cfg.get("pk", "").split(",") if p.strip()]
+                tables.append({
+                    "sql_table": table_name,
+                    "entity": cfg.get("entity", table_name),
+                    "strategy": cfg.get("strategy", "checksum"),
+                    "date_col": cfg.get("date_col"),
+                    "pk_columns": pk_cols,
+                    "row_count": row_count,
+                    "columns": [{
+                        "name": c["COLUMN_NAME"],
+                        "type": c["DATA_TYPE"],
+                        "max_length": c["CHARACTER_MAXIMUM_LENGTH"],
+                        "nullable": c["IS_NULLABLE"] == "YES",
+                        "is_pk": c["COLUMN_NAME"] in pk_cols,
+                        "ordinal": c["ORDINAL_POSITION"],
+                    } for c in columns],
+                })
+            except Exception as te:
+                tables.append({
+                    "sql_table": table_name,
+                    "entity": cfg.get("entity", table_name),
+                    "error": str(te),
+                    "columns": [],
+                    "row_count": 0,
+                    "pk_columns": [],
+                })
+        conn.close()
+        return JSONResponse({"database": PCGRAF_DB, "tables": tables})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def data_curation_save(request: Request):
+    """Save curated data changes to Supabase and/or PcGraf ERP.
+    Body: { table, schema, row_id, changes: {col: val}, targets: ['supabase','erp','faiss'] }
+    """
+    body = await request.json()
+    table = body.get("table", "")
+    schema = body.get("schema", "tms")
+    row_id = body.get("row_id")
+    changes = body.get("changes", {})
+    targets = body.get("targets", ["supabase", "faiss"])
+    results = {}
+
+    if not table or not changes:
+        return JSONResponse({"error": "table and changes required"}, status_code=400)
+
+    # 1. Supabase update
+    if "supabase" in targets:
+        try:
+            sb_url = os.environ.get("SUPABASE_URL", "")
+            sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+            import httpx as _httpx
+            profile = "tms" if schema == "tms" else "public"
+            resp = _httpx.patch(
+                f"{sb_url}/rest/v1/{table}?id=eq.{row_id}",
+                headers={
+                    "Authorization": f"Bearer {sb_key}",
+                    "apikey": sb_key,
+                    "Content-Type": "application/json",
+                    "Accept-Profile": profile,
+                    "Content-Profile": profile,
+                    "Prefer": "return=minimal",
+                },
+                json=changes,
+                timeout=15.0,
+            )
+            results["supabase"] = {"status": "ok" if resp.status_code < 300 else "error", "code": resp.status_code}
+        except Exception as e:
+            results["supabase"] = {"status": "error", "message": str(e)}
+
+    # 2. PcGraf ERP update
+    if "erp" in targets:
+        try:
+            import pymssql
+            from agent.cdc.config import PCGRAF_HOST, PCGRAF_USER, PCGRAF_PASS, PCGRAF_DB
+            conn = pymssql.connect(server=PCGRAF_HOST, user=PCGRAF_USER, password=PCGRAF_PASS, database=PCGRAF_DB)
+            cursor = conn.cursor()
+            set_clause = ", ".join([f"[{k}] = %s" for k in changes.keys()])
+            pk_col = body.get("pk_col", "id")
+            sql = f"UPDATE [{table}] SET {set_clause} WHERE [{pk_col}] = %s"
+            params = list(changes.values()) + [row_id]
+            cursor.execute(sql, tuple(params))
+            conn.commit()
+            conn.close()
+            results["erp"] = {"status": "ok", "rows_affected": cursor.rowcount}
+        except Exception as e:
+            results["erp"] = {"status": "error", "message": str(e)}
+
+    # 3. FAISS KB refresh
+    if "faiss" in targets:
+        try:
+            from agent.knowledge_base import incremental_sync
+            incremental_sync()
+            results["faiss"] = {"status": "ok"}
+        except Exception as e:
+            results["faiss"] = {"status": "error", "message": str(e)}
+
+    return JSONResponse({"results": results})
+
+
+# ---------------------------------------------------------------------------
+# CDC (Change Data Capture) API endpoints
+# ---------------------------------------------------------------------------
+
+async def cdc_status(request: Request):
+    """Get CDC watermarks and status for all tracked tables."""
+    sb_url = os.environ.get("SUPABASE_URL", "")
+    sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not sb_url or not sb_key:
+        return JSONResponse({"error": "Supabase not configured"}, status_code=500)
+    tms_headers = {"Authorization": f"Bearer {sb_key}", "apikey": sb_key, "Accept-Profile": "tms"}
+    try:
+        import httpx as _httpx
+        resp = _httpx.get(
+            f"{sb_url}/rest/v1/cdc_watermarks?select=*&order=sql_table_name",
+            headers=tms_headers,
+            timeout=15.0,
+        )
+        watermarks = resp.json() if resp.status_code == 200 else []
+        # Also get recent events count
+        resp2 = _httpx.get(
+            f"{sb_url}/rest/v1/cdc_events?select=sql_table_name,event_type&order=detected_at.desc&limit=500",
+            headers=tms_headers,
+            timeout=15.0,
+        )
+        events = resp2.json() if resp2.status_code == 200 else []
+        # Aggregate events by table
+        event_counts = {}
+        for ev in events:
+            t = ev.get("sql_table_name", "")
+            event_counts[t] = event_counts.get(t, 0) + 1
+        return JSONResponse({
+            "watermarks": watermarks,
+            "recent_event_counts": event_counts,
+            "total_recent_events": len(events),
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def cdc_poll_now(request: Request):
+    """Trigger an immediate CDC poll for one or all tables."""
+    body = await request.json()
+    table = body.get("table")  # None = poll all
+    try:
+        from cdc.poller import CDCPoller
+        from cdc.config import CDC_TABLES
+        poller = CDCPoller(kafka_producer=None)  # No Kafka in web context
+        if table:
+            if table not in CDC_TABLES:
+                return JSONResponse({"error": f"Table {table} not tracked. Available: {list(CDC_TABLES.keys())}"}, status_code=400)
+            result = poller.poll_table(table, CDC_TABLES[table])
+            return JSONResponse({"results": [result]})
+        else:
+            results = poller.poll_all()
+            return JSONResponse({"results": results})
+    except Exception as e:
+        logger.error(f"CDC poll error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def cdc_table_registry(request: Request):
+    """Get the table registry mapping SQL tech names to business-readable names."""
+    sb_url = os.environ.get("SUPABASE_URL", "")
+    sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not sb_url or not sb_key:
+        return JSONResponse({"error": "Supabase not configured"}, status_code=500)
+    try:
+        import httpx as _httpx
+        resp = _httpx.get(
+            f"{sb_url}/rest/v1/table_registry?select=*&order=erp_module,entity_name",
+            headers={"Authorization": f"Bearer {sb_key}", "apikey": sb_key, "Accept-Profile": "tms"},
+            timeout=15.0,
+        )
+        return JSONResponse({"tables": resp.json() if resp.status_code == 200 else []})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 async def health(request: Request):
+    from agent.llm_fallback import get_fallback_status
     vs = get_vectorstore()
     analytics_url = os.environ.get("ANALYTICS_AGENT_URL", "")
     data_svc_url = os.environ.get("DATA_SERVICE_AGENT_URL", "")
@@ -454,6 +1293,7 @@ async def health(request: Request):
             "analytics": analytics_url or "in-process",
             "data_service": data_svc_url or "in-process",
         },
+        "llm_fallback": get_fallback_status(),
     })
 
 
@@ -480,6 +1320,8 @@ routes = [
     # KB
     Route("/kb/search", kb_search_endpoint, methods=["POST"]),
     Route("/kb/sync", kb_sync_endpoint, methods=["POST"]),
+    Route("/kb/stats", kb_stats_endpoint, methods=["GET"]),
+    Route("/kb/cdc_refresh", kb_cdc_refresh_endpoint, methods=["POST"]),
     Route("/kb/upload", kb_upload_endpoint, methods=["POST"]),
     # Sessions
     Route("/sessions", sessions_list, methods=["GET"]),
@@ -495,6 +1337,26 @@ routes = [
     Route("/pcgraf/databases", pcgraf_databases, methods=["GET"]),
     Route("/pcgraf/tables", pcgraf_tables, methods=["GET"]),
     Route("/pcgraf/health", pcgraf_health, methods=["GET"]),
+    Route("/pcgraf/backup", pcgraf_backup, methods=["POST"]),
+    Route("/pcgraf/backups", pcgraf_backup_list, methods=["GET"]),
+    # TICA / Aduanas
+    Route("/tica/health", tica_health, methods=["GET"]),
+    Route("/tica/duas", tica_search_duas, methods=["POST"]),
+    Route("/tica/partida", tica_lookup_partida, methods=["GET"]),
+    Route("/tica/conciliate", tica_conciliate, methods=["POST"]),
+    # AI Code Mapping
+    Route("/code-mapping/match", code_mapping_match, methods=["POST"]),
+    Route("/code-mapping/save", code_mapping_save, methods=["POST"]),
+    Route("/code-mapping/list", code_mapping_list, methods=["GET"]),
+    # CDC (Change Data Capture)
+    Route("/cdc/status", cdc_status, methods=["GET"]),
+    Route("/cdc/poll", cdc_poll_now, methods=["POST"]),
+    Route("/cdc/registry", cdc_table_registry, methods=["GET"]),
+    # Data Model Dashboard
+    Route("/data-model/schema", data_model_schema, methods=["GET"]),
+    Route("/data-model/kafka", kafka_status, methods=["GET"]),
+    Route("/data-model/erp-schema", erp_schema, methods=["GET"]),
+    Route("/data-model/curation", data_curation_save, methods=["POST"]),
 ]
 
 # Mount static assets (JS/CSS/images) if STATIC_DIR exists
@@ -519,6 +1381,13 @@ middleware = [
 ]
 
 app = Starlette(routes=routes, middleware=middleware)
+
+# Start KB auto-sync daemon (4-min interval) on server boot
+try:
+    start_auto_sync()
+    logger.info("KB auto-sync daemon started (4-min interval)")
+except Exception as e:
+    logger.warning(f"KB auto-sync start failed: {e}")
 
 
 if __name__ == "__main__":

@@ -18,10 +18,10 @@ from typing import Annotated, TypedDict, Sequence
 
 from langchain_core.tools import tool
 from langchain_core.messages import BaseMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
+from agent.llm_fallback import create_fallback_llm_with_tools
 
 logger = logging.getLogger(__name__)
 
@@ -417,15 +417,14 @@ class AnalyticsState(TypedDict):
 
 def create_analytics_graph():
     """Create the Data Analytics Agent graph."""
-    llm = ChatOpenAI(
-        model=os.environ.get("ANALYTICS_MODEL", "openai/gpt-4o-mini"),
-        openai_api_key=os.environ.get("OPENROUTER_API_KEY", ""),
-        openai_api_base="https://openrouter.ai/api/v1",
+    llm_with_tools = create_fallback_llm_with_tools(
+        tools=ANALYTICS_TOOLS,
+        primary_model=os.environ.get("ANALYTICS_MODEL", "openai/gpt-4o-mini"),
+        tier="coding",
         temperature=0.1,
         max_tokens=2048,
         streaming=False,
     )
-    llm_with_tools = llm.bind_tools(ANALYTICS_TOOLS)
 
     def should_continue(state: AnalyticsState) -> str:
         last_message = state["messages"][-1]

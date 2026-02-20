@@ -1,0 +1,467 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Kafka Topics — one per siawin0 CDC-tracked table
+# All topics: 5 partitions, replication factor 5, 7-day retention
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Inventario Module ──────────────────────────────────────────────────────
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.in04
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: inventario
+    entity: productos
+spec:
+  topicName: siawin0.IN04
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.in11
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: inventario
+    entity: movimientos-inventario
+spec:
+  topicName: siawin0.IN11
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.in13
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: inventario
+    entity: proveedores
+spec:
+  topicName: siawin0.IN13
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.in14
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: inventario
+    entity: inventario-bodega
+spec:
+  topicName: siawin0.IN14
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.in16
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: inventario
+    entity: kardex
+spec:
+  topicName: siawin0.IN16
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.in34
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: inventario
+    entity: transacciones-inv
+spec:
+  topicName: siawin0.IN34
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.in42
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: inventario
+    entity: ordenes-compra-inv
+spec:
+  topicName: siawin0.IN42
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.in64
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: inventario
+    entity: bodegas
+spec:
+  topicName: siawin0.IN64
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.in97
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: inventario
+    entity: historico-costos
+spec:
+  topicName: siawin0.IN97
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+# ── Facturación Module ─────────────────────────────────────────────────────
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.fa01
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: facturacion
+    entity: lineas-factura
+spec:
+  topicName: siawin0.FA01
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.fa12
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: facturacion
+    entity: facturas
+spec:
+  topicName: siawin0.FA12
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.fa20
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: facturacion
+    entity: clientes
+spec:
+  topicName: siawin0.FA20
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.fa25
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: facturacion
+    entity: recibos-caja
+spec:
+  topicName: siawin0.FA25
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+# ── Compras Module ─────────────────────────────────────────────────────────
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.cp10
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: compras
+    entity: ordenes-compra
+spec:
+  topicName: siawin0.CP10
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.cp11
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: compras
+    entity: lineas-oc
+spec:
+  topicName: siawin0.CP11
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.cp12
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: compras
+    entity: recepciones-compra
+spec:
+  topicName: siawin0.CP12
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.cp21
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: compras
+    entity: cuentas-por-pagar
+spec:
+  topicName: siawin0.CP21
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.cp31
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: compras
+    entity: pagos-proveedores
+spec:
+  topicName: siawin0.CP31
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+# ── Cuentas por Cobrar ─────────────────────────────────────────────────────
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.cc10
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: cxc
+    entity: cuentas-por-cobrar
+spec:
+  topicName: siawin0.CC10
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+# ── Contabilidad ───────────────────────────────────────────────────────────
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.co00
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: contabilidad
+    entity: plan-cuentas
+spec:
+  topicName: siawin0.CO00
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+# ── Bancos / Tesorería ─────────────────────────────────────────────────────
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.ba10
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: bancos
+    entity: movimientos-bancarios
+spec:
+  topicName: siawin0.BA10
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+# ── General ────────────────────────────────────────────────────────────────
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.tc
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: general
+    entity: tipos-cambio
+spec:
+  topicName: siawin0.TC
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.ge01
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: general
+    entity: catalogos-generales
+spec:
+  topicName: siawin0.GE01
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete
+    compression.type: lz4
+---
+# ── CDC Dead-Letter Topic ──────────────────────────────────────────────────
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: siawin0.dlq
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+    erp-module: system
+    entity: dead-letter-queue
+spec:
+  topicName: siawin0.DLQ
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "2592000000"
+    min.insync.replicas: "2"
+    cleanup.policy: delete

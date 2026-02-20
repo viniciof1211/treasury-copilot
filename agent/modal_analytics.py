@@ -117,11 +117,13 @@ def web():
         })
 
     async def health(request: Request):
+        from agent.llm_fallback import get_fallback_status
         return JSONResponse({
             "status": "ok",
             "agent": "analytics",
             "model": os.environ.get("ANALYTICS_MODEL", "openai/gpt-4o-mini"),
             "langsmith_project": "treasury-analytics-agent",
+            "llm_fallback": get_fallback_status(),
         })
 
     routes = [

@@ -39,6 +39,9 @@ uvicorn>=0.30.0
 # SQL Server (PcGraf ERP)
 pymssql>=2.2.0
 
+# Kafka (CDC event streaming)
+kafka-python>=2.0.0
+
 # Utilities
 python-dotenv>=1.0.0
 httpx>=0.27.0

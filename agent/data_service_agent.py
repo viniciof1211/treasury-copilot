@@ -10,11 +10,11 @@ import logging
 import httpx
 from typing import Optional
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
+from agent.llm_fallback import create_fallback_llm_with_tools
 from typing import Annotated, TypedDict, Sequence
 
 logger = logging.getLogger(__name__)
@@ -219,15 +219,14 @@ class DataServiceState(TypedDict):
 
 def create_data_service_graph():
     """Create the Data Service Agent graph."""
-    llm = ChatOpenAI(
-        model=os.environ.get("OPENROUTER_MODEL", "gpt-oss-120b"),
-        openai_api_key=os.environ.get("OPENROUTER_API_KEY", ""),
-        openai_api_base="https://openrouter.ai/api/v1",
+    llm_with_tools = create_fallback_llm_with_tools(
+        tools=DATA_SERVICE_TOOLS,
+        primary_model=os.environ.get("OPENROUTER_MODEL", "gpt-oss-120b"),
+        tier="reasoning",
         temperature=0.0,
         max_tokens=4096,
         streaming=True,
     )
-    llm_with_tools = llm.bind_tools(DATA_SERVICE_TOOLS)
 
     def should_continue(state: DataServiceState) -> str:
         last_message = state["messages"][-1]

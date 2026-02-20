@@ -4,6 +4,7 @@ import {
   TrendingDown, RefreshCw, Lightbulb, DollarSign, Layers, Shield, Globe,
   BookOpen, Search, ChevronDown, ChevronUp, Scale, Anchor, Warehouse, FileText, Activity, Target, ShieldCheck,
   Database, Server, Wifi, WifiOff,
+  Filter, Building2, Calendar, Edit3, Save, X, Download, Upload, History, CheckCircle2, Pencil,
 } from 'lucide-react';
 import { Layout } from '../components/layout/Layout';
 import { KPICard } from '../components/dashboard/KPICard';
@@ -22,7 +23,7 @@ import {
   PolarAngleAxis, PolarRadiusAxis, Treemap, AreaChart, ReferenceLine,
 } from 'recharts';
 import { FilterableTable, type ColumnDef } from '../components/ui/FilterableTable';
-import { pcgrafHealth, pcgrafDatabases, pcgrafQuery, type PcGrafHealthResult } from '../lib/pcgraf';
+import { pcgrafHealth, pcgrafDatabases, pcgrafQuery, pcgrafBackup, pcgrafBackupList, type PcGrafHealthResult } from '../lib/pcgraf';
 
 const CHART_COLORS = ['#1A4A28', '#2D6A3F', '#C9A84C', '#3B82F6', '#8B5CF6', '#EC4899', '#F59E0B', '#EF4444', '#06B6D4', '#84CC16'];
 const ABC_COLORS: Record<string, string> = { A: '#1A4A28', B: '#C9A84C', C: '#9CA3AF' };
@@ -188,6 +189,18 @@ export function ComprasDashboard() {
   const [lastRefresh, setLastRefresh] = useState(new Date());
   const [provFilter, setProvFilter] = useState('all');
   const [abcFilter, setAbcFilter] = useState('all');
+  const [empresaFilter, setEmpresaFilter] = useState('all');
+  const [buFilter, setBuFilter] = useState('all');
+  const [periodoFilter, setPeriodoFilter] = useState('all');
+  const [tipoCompraFilter, setTipoCompraFilter] = useState('all');
+  const [bodegaFilter, setBodegaFilter] = useState('all');
+  const [showExcludedBodegas, setShowExcludedBodegas] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  // Curation state
+  const [showCuration, setShowCuration] = useState(false);
+  const [editingRow, setEditingRow] = useState<string | null>(null);
+  const [editValues, setEditValues] = useState<Record<string, string>>({});
+  const [curationSaving, setCurationSaving] = useState(false);
   const [detailRecord, setDetailRecord] = useState<Record<string, unknown> | null>(null);
   // Valor Nacionalizado state
   const [showGlossary, setShowGlossary] = useState(false);
@@ -277,18 +290,104 @@ export function ComprasDashboard() {
     finally { setCabysLoading(false); }
   }, []);
 
+  // ── Local vs International pattern detection ───────────────────────────
+  const enrichedData = useMemo(() => {
+    return mrpAll.map(r => {
+      // If tipo_compra already set, use it
+      if (r.tipo_compra && r.tipo_compra !== 'Sin Definir') return r;
+      // Pattern detection: determine local vs international
+      let detected: string = 'Sin Definir';
+      const origen = (r.origen || '').toLowerCase();
+      const tipo = (r.tipo_item || '').toLowerCase();
+      const prov = (r.proveedor || '').toLowerCase();
+      const lt = Number(r.lead_time_dias) || 0;
+      // Explicit tipo_item
+      if (tipo === 'importado') detected = 'Internacional';
+      else if (tipo === 'local') detected = 'Local';
+      // Origin-based
+      else if (['europa', 'asia', 'china', 'america', 'usa', 'eeuu', 'mexico', 'ecuador', 'brasil', 'india', 'taiwan', 'japon', 'alemania', 'italia', 'españa'].some(o => origen.includes(o))) detected = 'Internacional';
+      else if (['local', 'costa rica', 'cr', 'nacional'].some(o => origen.includes(o))) detected = 'Local';
+      // Lead time heuristic: >30 days likely international
+      else if (lt > 30) detected = 'Internacional';
+      else if (lt > 0 && lt <= 7) detected = 'Local';
+      // Provider name patterns
+      else if (['import', 'trading', 'overseas', 'international', 'global', 'gmbh', 'ltd', 'inc', 'corp'].some(k => prov.includes(k))) detected = 'Internacional';
+      return { ...r, tipo_compra: detected };
+    });
+  }, [mrpAll]);
+
   // ── Filters ──────────────────────────────────────────────────────────────
   const data = useMemo(() => {
-    let d = mrpAll;
+    let d = enrichedData;
+    if (!showExcludedBodegas) d = d.filter(r => !r.bodega_excluida);
+    if (empresaFilter !== 'all') d = d.filter(r => (r.empresa || 'Sin Empresa') === empresaFilter);
+    if (buFilter !== 'all') d = d.filter(r => (r.unidad_negocio || 'Sin Unidad') === buFilter);
     if (provFilter !== 'all') d = d.filter(r => r.proveedor === provFilter);
     if (abcFilter !== 'all') d = d.filter(r => r.abc_class === abcFilter);
+    if (tipoCompraFilter !== 'all') d = d.filter(r => (r.tipo_compra || 'Sin Definir') === tipoCompraFilter);
+    if (bodegaFilter !== 'all') d = d.filter(r => (r.bodega || 'Sin Bodega') === bodegaFilter);
+    if (periodoFilter !== 'all') {
+      const [y, m] = periodoFilter.split('-').map(Number);
+      d = d.filter(r => (r.periodo_anio || 0) === y && (r.periodo_mes || 0) === m);
+    }
     return d;
-  }, [mrpAll, provFilter, abcFilter]);
+  }, [enrichedData, provFilter, abcFilter, empresaFilter, buFilter, periodoFilter, tipoCompraFilter, bodegaFilter, showExcludedBodegas]);
 
+  // ── Filter option lists (derived from full dataset) ─────────────────────
   const proveedores = useMemo(() => {
-    const s = new Set(mrpAll.map(r => r.proveedor).filter(Boolean));
+    const s = new Set(enrichedData.map(r => r.proveedor).filter(Boolean));
     return Array.from(s).sort();
-  }, [mrpAll]);
+  }, [enrichedData]);
+
+  const empresas = useMemo(() => {
+    const s = new Set(enrichedData.map(r => r.empresa || 'Sin Empresa').filter(Boolean));
+    return Array.from(s).sort();
+  }, [enrichedData]);
+
+  const unidadesNegocio = useMemo(() => {
+    const s = new Set(enrichedData.map(r => r.unidad_negocio || 'Sin Unidad').filter(Boolean));
+    return Array.from(s).sort();
+  }, [enrichedData]);
+
+  const bodegas = useMemo(() => {
+    const s = new Set(enrichedData.map(r => r.bodega || 'Sin Bodega').filter(Boolean));
+    return Array.from(s).sort();
+  }, [enrichedData]);
+
+  const periodos = useMemo(() => {
+    const s = new Set<string>();
+    enrichedData.forEach(r => {
+      if (r.periodo_anio && r.periodo_mes) s.add(`${r.periodo_anio}-${r.periodo_mes}`);
+    });
+    // Also add created_at based periods
+    enrichedData.forEach(r => {
+      if (r.created_at) {
+        const d = new Date(r.created_at);
+        if (!isNaN(d.getTime())) s.add(`${d.getFullYear()}-${d.getMonth() + 1}`);
+      }
+    });
+    return Array.from(s).sort().reverse();
+  }, [enrichedData]);
+
+  const activeFilterCount = [empresaFilter, buFilter, provFilter, abcFilter, tipoCompraFilter, bodegaFilter, periodoFilter].filter(f => f !== 'all').length;
+
+  const clearAllFilters = () => {
+    setEmpresaFilter('all'); setBuFilter('all'); setProvFilter('all');
+    setAbcFilter('all'); setTipoCompraFilter('all'); setBodegaFilter('all');
+    setPeriodoFilter('all');
+  };
+
+  // ── Tipo Compra distribution (for KPI) ──────────────────────────────────
+  const tipoCompraDist = useMemo(() => {
+    const map: Record<string, { tipo: string; count: number; value: number }> = {};
+    data.forEach(r => {
+      const t = r.tipo_compra || 'Sin Definir';
+      if (!map[t]) map[t] = { tipo: t, count: 0, value: 0 };
+      map[t].count++;
+      map[t].value += Number(r.costo_total_inventario) || 0;
+    });
+    return Object.values(map).sort((a, b) => b.value - a.value);
+  }, [data]);
 
   // ── KPIs ──────────────────────────────────────────────────────────────────
   const totalInvValue = data.reduce((s, r) => s + (Number(r.costo_total_inventario) || 0), 0);
@@ -911,35 +1010,333 @@ export function ComprasDashboard() {
               Compras &amp; MRP
             </h1>
             <p className="text-gray-500 mt-1">
-              {fmt(totalSKUs)} SKUs · {fmt(activeSKUs)} activos · {proveedores.length} proveedores · Última carga: {lastRefresh.toLocaleTimeString('es-CR')}
+              {fmt(totalSKUs)} SKUs · {fmt(activeSKUs)} activos · {proveedores.length} proveedores
+              {tipoCompraDist.map(t => ` · ${t.tipo}: ${fmt(t.count)}`).join('')}
+              {' · '}Última carga: {lastRefresh.toLocaleTimeString('es-CR')}
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            {/* ABC filter */}
-            <select
-              value={abcFilter}
-              onChange={e => setAbcFilter(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm border transition-colors ${
+                activeFilterCount > 0 ? 'bg-[#1A4A28] text-white border-[#1A4A28]' : 'border-gray-300 hover:bg-gray-50'
+              }`}
             >
-              <option value="all">Todas las clases ABC</option>
-              <option value="A">Clase A</option>
-              <option value="B">Clase B</option>
-              <option value="C">Clase C</option>
-            </select>
-            {/* Provider filter */}
-            <select
-              value={provFilter}
-              onChange={e => setProvFilter(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm max-w-[200px]"
+              <Filter className="w-4 h-4" />
+              Filtros {activeFilterCount > 0 && <Badge variant="warning">{activeFilterCount}</Badge>}
+            </button>
+            <button
+              onClick={() => setShowCuration(!showCuration)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm border transition-colors ${
+                showCuration ? 'bg-[#C9A84C] text-white border-[#C9A84C]' : 'border-gray-300 hover:bg-gray-50'
+              }`}
             >
-              <option value="all">Todos los proveedores</option>
-              {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
-            <button onClick={fetchData} className="p-2 rounded-lg border border-gray-300 hover:bg-gray-50">
+              <Pencil className="w-4 h-4" />
+              Curación
+            </button>
+            <button onClick={fetchData} className="p-2 rounded-lg border border-gray-300 hover:bg-gray-50" title="Refrescar datos">
               <RefreshCw className="w-4 h-4" />
             </button>
           </div>
         </div>
+
+        {/* ── Comprehensive Filter Bar ─────────────────────────────────── */}
+        {showFilters && (
+          <Card className="border-[#1A4A28]/30 bg-green-50/30">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm font-semibold text-[#1A4A28] flex items-center gap-2">
+                  <Filter className="w-4 h-4" />
+                  Filtros de Segmentación
+                </p>
+                {activeFilterCount > 0 && (
+                  <button onClick={clearAllFilters} className="text-xs text-red-600 hover:underline flex items-center gap-1">
+                    <X className="w-3 h-3" /> Limpiar todos ({activeFilterCount})
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3">
+                {/* Empresa */}
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wide font-medium mb-1 block">
+                    <Building2 className="w-3 h-3 inline mr-1" />Empresa
+                  </label>
+                  <select value={empresaFilter} onChange={e => setEmpresaFilter(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+                    <option value="all">Todas ({fmt(empresas.length)})</option>
+                    {empresas.map(e => <option key={e} value={e}>{e}</option>)}
+                  </select>
+                </div>
+                {/* Unidad de Negocio */}
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wide font-medium mb-1 block">
+                    <Layers className="w-3 h-3 inline mr-1" />Unidad de Negocio
+                  </label>
+                  <select value={buFilter} onChange={e => setBuFilter(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+                    <option value="all">Todas ({fmt(unidadesNegocio.length)})</option>
+                    {unidadesNegocio.map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                </div>
+                {/* Periodo */}
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wide font-medium mb-1 block">
+                    <Calendar className="w-3 h-3 inline mr-1" />Periodo (Mes/Año)
+                  </label>
+                  <select value={periodoFilter} onChange={e => setPeriodoFilter(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+                    <option value="all">Todos los periodos</option>
+                    {periodos.map(p => {
+                      const [y, m] = p.split('-');
+                      const monthName = new Date(Number(y), Number(m) - 1).toLocaleDateString('es-CR', { month: 'short' });
+                      return <option key={p} value={p}>{monthName} {y}</option>;
+                    })}
+                  </select>
+                </div>
+                {/* Tipo Compra */}
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wide font-medium mb-1 block">
+                    <Globe className="w-3 h-3 inline mr-1" />Tipo Compra
+                  </label>
+                  <select value={tipoCompraFilter} onChange={e => setTipoCompraFilter(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+                    <option value="all">Local + Internacional</option>
+                    <option value="Local">Local</option>
+                    <option value="Internacional">Internacional</option>
+                    <option value="Sin Definir">Sin Definir</option>
+                  </select>
+                </div>
+                {/* ABC */}
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wide font-medium mb-1 block">
+                    <BarChart3 className="w-3 h-3 inline mr-1" />Clase ABC
+                  </label>
+                  <select value={abcFilter} onChange={e => setAbcFilter(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+                    <option value="all">Todas</option>
+                    <option value="A">A (Alto valor)</option>
+                    <option value="B">B (Medio)</option>
+                    <option value="C">C (Bajo)</option>
+                  </select>
+                </div>
+                {/* Proveedor */}
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wide font-medium mb-1 block">
+                    <Truck className="w-3 h-3 inline mr-1" />Proveedor
+                  </label>
+                  <select value={provFilter} onChange={e => setProvFilter(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+                    <option value="all">Todos ({fmt(proveedores.length)})</option>
+                    {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+                {/* Bodega */}
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wide font-medium mb-1 block">
+                    <Warehouse className="w-3 h-3 inline mr-1" />Bodega
+                  </label>
+                  <select value={bodegaFilter} onChange={e => setBodegaFilter(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+                    <option value="all">Todas ({fmt(bodegas.length)})</option>
+                    {bodegas.map(b => <option key={b} value={b}>{b}</option>)}
+                  </select>
+                </div>
+              </div>
+              {/* Excluded bodegas toggle */}
+              <div className="mt-3 flex items-center gap-4 text-xs text-gray-500">
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="checkbox" checked={showExcludedBodegas} onChange={e => setShowExcludedBodegas(e.target.checked)}
+                    className="rounded border-gray-300" />
+                  Mostrar bodegas excluidas
+                </label>
+                <span className="text-gray-400">|</span>
+                <span>Mostrando <strong className="text-gray-700">{fmt(data.length)}</strong> de {fmt(enrichedData.length)} SKUs</span>
+                {activeFilterCount > 0 && (
+                  <span className="text-[#1A4A28] font-medium">({activeFilterCount} filtro{activeFilterCount > 1 ? 's' : ''} activo{activeFilterCount > 1 ? 's' : ''})</span>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ── Curation Module ────────────────────────────────────────────── */}
+        {showCuration && (
+          <Card className="border-[#C9A84C] border-2">
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                <span className="flex items-center gap-2 text-base">
+                  <Edit3 className="w-5 h-5 text-[#C9A84C]" />
+                  Módulo de Curación de Datos
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={async () => {
+                      const result = await pcgrafBackup({ backup_type: 'pre_curation', user: 'dashboard' });
+                      if (result.error) alert(`Error: ${result.error}`);
+                      else alert(`Backup creado: ${result.row_count} filas, checksum: ${result.checksum?.slice(0, 12)}...`);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  >
+                    <History className="w-3.5 h-3.5" />
+                    Crear Respaldo
+                  </button>
+                  <button
+                    onClick={async () => {
+                      const result = await pcgrafBackupList();
+                      const list = result.backups || [];
+                      alert(`${list.length} respaldos:\n${list.slice(0, 5).map(b =>
+                        `• ${new Date(b.created_at).toLocaleString('es-CR')} — ${b.backup_type} — ${b.row_count} filas — ${b.checksum.slice(0, 8)}...`
+                      ).join('\n')}`);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-300 rounded-lg hover:bg-gray-50"
+                  >
+                    <Database className="w-3.5 h-3.5" />
+                    Ver Respaldos
+                  </button>
+                </div>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 text-sm">
+                <p className="font-medium text-amber-800 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4" />
+                  Antes de editar, cree un respaldo inmutable. Los cambios se guardan en Supabase y opcionalmente se sincronizan a PcGraf.
+                </p>
+              </div>
+              <div className="overflow-x-auto max-h-[500px] overflow-y-auto border rounded-lg">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-gray-50 z-10">
+                    <tr className="border-b-2 border-gray-300">
+                      <th className="py-2 px-2 text-left font-semibold">Acciones</th>
+                      <th className="py-2 px-2 text-left font-semibold">Código</th>
+                      <th className="py-2 px-2 text-left font-semibold">Descripción</th>
+                      <th className="py-2 px-2 text-left font-semibold">Empresa</th>
+                      <th className="py-2 px-2 text-left font-semibold">Unidad Neg.</th>
+                      <th className="py-2 px-2 text-left font-semibold">Bodega</th>
+                      <th className="py-2 px-2 text-left font-semibold">Tipo Compra</th>
+                      <th className="py-2 px-2 text-left font-semibold">Proveedor</th>
+                      <th className="py-2 px-2 text-left font-semibold">Origen</th>
+                      <th className="py-2 px-2 text-right font-semibold">Costo Unit.</th>
+                      <th className="py-2 px-2 text-center font-semibold">Excluir Bodega</th>
+                      <th className="py-2 px-2 text-left font-semibold">Notas</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {data.slice(0, 50).map((row) => {
+                      const isEditing = editingRow === row.codigo;
+                      return (
+                        <tr key={row.codigo} className={isEditing ? 'bg-yellow-50' : 'hover:bg-gray-50'}>
+                          <td className="py-1.5 px-2">
+                            {isEditing ? (
+                              <div className="flex gap-1">
+                                <button
+                                  onClick={async () => {
+                                    setCurationSaving(true);
+                                    try {
+                                      const { error } = await supabase
+                                        .schema('silver_finance' as 'public')
+                                        .from('mrp_master')
+                                        .update({
+                                          empresa: editValues.empresa || null,
+                                          unidad_negocio: editValues.unidad_negocio || null,
+                                          bodega: editValues.bodega || null,
+                                          tipo_compra: editValues.tipo_compra || null,
+                                          proveedor: editValues.proveedor || row.proveedor,
+                                          origen: editValues.origen || row.origen,
+                                          costo_unitario: editValues.costo_unitario ? Number(editValues.costo_unitario) : row.costo_unitario,
+                                          bodega_excluida: editValues.bodega_excluida === 'true',
+                                          notas_curacion: editValues.notas_curacion || null,
+                                          curado_por: 'dashboard',
+                                          curado_at: new Date().toISOString(),
+                                        })
+                                        .eq('codigo', row.codigo);
+                                      if (error) alert(`Error: ${error.message}`);
+                                      else { setEditingRow(null); fetchData(); }
+                                    } finally { setCurationSaving(false); }
+                                  }}
+                                  disabled={curationSaving}
+                                  className="p-1 text-green-600 hover:bg-green-100 rounded"
+                                  title="Guardar"
+                                >
+                                  {curationSaving ? <LoadingSpinner size="sm" /> : <Save className="w-3.5 h-3.5" />}
+                                </button>
+                                <button onClick={() => setEditingRow(null)} className="p-1 text-red-600 hover:bg-red-100 rounded" title="Cancelar">
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setEditingRow(row.codigo);
+                                  setEditValues({
+                                    empresa: row.empresa || '',
+                                    unidad_negocio: row.unidad_negocio || '',
+                                    bodega: row.bodega || '',
+                                    tipo_compra: row.tipo_compra || '',
+                                    proveedor: row.proveedor || '',
+                                    origen: row.origen || '',
+                                    costo_unitario: String(row.costo_unitario || ''),
+                                    bodega_excluida: String(row.bodega_excluida || false),
+                                    notas_curacion: row.notas_curacion || '',
+                                  });
+                                }}
+                                className="p-1 text-gray-500 hover:bg-gray-100 rounded"
+                                title="Editar"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </td>
+                          <td className="py-1.5 px-2 font-mono">{row.codigo}</td>
+                          <td className="py-1.5 px-2 max-w-[150px] truncate" title={row.descripcion}>{row.descripcion}</td>
+                          {isEditing ? (
+                            <>
+                              <td className="py-1 px-1"><input value={editValues.empresa || ''} onChange={e => setEditValues(v => ({ ...v, empresa: e.target.value }))} className="w-full border rounded px-1 py-0.5 text-xs" /></td>
+                              <td className="py-1 px-1"><input value={editValues.unidad_negocio || ''} onChange={e => setEditValues(v => ({ ...v, unidad_negocio: e.target.value }))} className="w-full border rounded px-1 py-0.5 text-xs" /></td>
+                              <td className="py-1 px-1"><input value={editValues.bodega || ''} onChange={e => setEditValues(v => ({ ...v, bodega: e.target.value }))} className="w-full border rounded px-1 py-0.5 text-xs" /></td>
+                              <td className="py-1 px-1">
+                                <select value={editValues.tipo_compra || ''} onChange={e => setEditValues(v => ({ ...v, tipo_compra: e.target.value }))} className="w-full border rounded px-1 py-0.5 text-xs">
+                                  <option value="">Auto-detectar</option>
+                                  <option value="Local">Local</option>
+                                  <option value="Internacional">Internacional</option>
+                                  <option value="Sin Definir">Sin Definir</option>
+                                </select>
+                              </td>
+                              <td className="py-1 px-1"><input value={editValues.proveedor || ''} onChange={e => setEditValues(v => ({ ...v, proveedor: e.target.value }))} className="w-full border rounded px-1 py-0.5 text-xs" /></td>
+                              <td className="py-1 px-1"><input value={editValues.origen || ''} onChange={e => setEditValues(v => ({ ...v, origen: e.target.value }))} className="w-full border rounded px-1 py-0.5 text-xs" /></td>
+                              <td className="py-1 px-1"><input value={editValues.costo_unitario || ''} onChange={e => setEditValues(v => ({ ...v, costo_unitario: e.target.value }))} className="w-full border rounded px-1 py-0.5 text-xs text-right" type="number" step="0.01" /></td>
+                              <td className="py-1 px-1 text-center"><input type="checkbox" checked={editValues.bodega_excluida === 'true'} onChange={e => setEditValues(v => ({ ...v, bodega_excluida: String(e.target.checked) }))} /></td>
+                              <td className="py-1 px-1"><input value={editValues.notas_curacion || ''} onChange={e => setEditValues(v => ({ ...v, notas_curacion: e.target.value }))} className="w-full border rounded px-1 py-0.5 text-xs" placeholder="Notas..." /></td>
+                            </>
+                          ) : (
+                            <>
+                              <td className="py-1.5 px-2 text-gray-500">{row.empresa || '—'}</td>
+                              <td className="py-1.5 px-2 text-gray-500">{row.unidad_negocio || '—'}</td>
+                              <td className="py-1.5 px-2 text-gray-500">{row.bodega || '—'}</td>
+                              <td className="py-1.5 px-2">
+                                <Badge variant={row.tipo_compra === 'Internacional' ? 'warning' : row.tipo_compra === 'Local' ? 'success' : 'default'}>
+                                  {row.tipo_compra || '—'}
+                                </Badge>
+                              </td>
+                              <td className="py-1.5 px-2">{row.proveedor || '—'}</td>
+                              <td className="py-1.5 px-2">{row.origen || '—'}</td>
+                              <td className="py-1.5 px-2 text-right">{fmtUSD2(Number(row.costo_unitario) || 0)}</td>
+                              <td className="py-1.5 px-2 text-center">{row.bodega_excluida ? '✕' : ''}</td>
+                              <td className="py-1.5 px-2 text-gray-400 max-w-[100px] truncate">{row.notas_curacion || ''}</td>
+                            </>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[10px] text-gray-400 mt-2 italic">
+                Mostrando primeros 50 registros del dataset filtrado. Los cambios se guardan en Supabase (silver_finance.mrp_master) y se registran en silver_finance.curation_log.
+              </p>
+            </CardContent>
+          </Card>
+        )}
 
         {/* ── KPIs ────────────────────────────────────────────────────────── */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">

@@ -9,6 +9,7 @@ import { IngresosDashboard } from './pages/IngresosDashboard';
 import { BoardPresentation } from './pages/BoardPresentation';
 import { Chat } from './pages/Chat';
 import { DataSources } from './pages/DataSources';
+import { DataModelDashboard } from './pages/DataModelDashboard';
 import { Projects } from './pages/Projects';
 import { Admin } from './pages/Admin';
 import { ensureStorageBuckets } from './lib/supabase';
@@ -30,6 +31,7 @@ function App() {
           <Route path="/board" element={<BoardPresentation />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/data" element={<DataSources />} />
+          <Route path="/data-model" element={<DataModelDashboard />} />
           <Route path="/projects" element={<Projects />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="*" element={<Navigate to="/" replace />} />

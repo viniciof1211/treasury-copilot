@@ -81,6 +81,10 @@ function mapMRPRow(
     infaltable: str(['Infaltable']),
     descontinuado: str(['Descontinuado']),
     subclasificacion: str(['Subclasificacion', 'Subclas']),
+    // Segmentation
+    empresa: str(['Empresa', 'Compañía', 'Company', 'Sociedad']),
+    unidad_negocio: str(['Unidad de Negocio', 'Unidad Negocio', 'BU', 'Business Unit', 'Centro de Costo']),
+    bodega: str(['Bodega', 'Almacen', 'Almacén', 'Warehouse', 'Ubicacion']),
   };
 }
 

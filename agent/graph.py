@@ -5,13 +5,13 @@ import json
 import logging
 from typing import Annotated, TypedDict, Sequence
 
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
 from agent.tools import ALL_TOOLS
+from agent.llm_fallback import create_fallback_llm_with_tools
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,13 @@ Fuentes de Verdad
   * cxc_items — cuentas por cobrar (facturas a clientes, aging, gestor cobro, área comercial)
   * mrp_master — planning de compras / MRP (SKUs, inventario, alertas)
   * projection_12m — proyecciones de flujo de caja 12 meses
-- Knowledge Base (FAISS) — documentos Excel, procesos CxC/CxP, datos históricos indexados. Usa search_treasury_kb para buscar información.
+- Knowledge Base Unificada (FAISS) — SINGLE SOURCE OF TRUTH para todo el TMS. Contiene:
+  * Datos silver_finance: cxp_items, flujo_semanal, mrp_master, cxc_items, projection_12m, code_mappings
+  * Datos ERP PcGraf (tms.*): productos, proveedores, clientes, ordenes_compra, facturas, inventario_bodega, movimientos_bancarios, plan_cuentas, tipos_cambio
+  * Eventos CDC (cambios detectados en ERP)
+  * Archivos Excel/DOCX indexados
+  Se sincroniza automáticamente cada 4 minutos y se actualiza incrementalmente con cada commit CDC.
+  Usa search_treasury_kb para buscar CUALQUIER dato del sistema.
 - Archivos ingestado(s) a Supabase Storage (Excel/CSV) SOLO si fueron procesados por el endpoint de ingesta.
 - Nunca uses números "vistos en el chat" como verdad si no provienen de query/tool.
 
@@ -131,16 +137,14 @@ class AgentState(TypedDict):
 def create_agent_graph():
     """Create and compile the LangGraph treasury agent."""
 
-    llm = ChatOpenAI(
-        model=os.environ.get("OPENROUTER_MODEL", "gpt-oss-120b"),
-        openai_api_key=os.environ.get("OPENROUTER_API_KEY", ""),
-        openai_api_base="https://openrouter.ai/api/v1",
+    llm_with_tools = create_fallback_llm_with_tools(
+        tools=ALL_TOOLS,
+        primary_model=os.environ.get("OPENROUTER_MODEL", "gpt-oss-120b"),
+        tier="reasoning",
         temperature=0.1,
         max_tokens=4096,
         streaming=True,
     )
-
-    llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
     def should_continue(state: AgentState) -> str:
         """Decide whether to call tools or end."""

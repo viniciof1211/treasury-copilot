@@ -1,0 +1,91 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# CDC Consumer — long-running Deployment that subscribes to Kafka topics
+# and writes changes to Supabase canonical TMS tables
+# ══════════════════════════════════════════════════════════════════════════════
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cdc-consumer
+  namespace: treasury-cdc
+  labels:
+    app.kubernetes.io/name: cdc-consumer
+    app.kubernetes.io/part-of: treasury-copilot
+    app.kubernetes.io/component: cdc
+spec:
+  replicas: 2                        # 2 consumers for partition balancing
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cdc-consumer
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cdc-consumer
+        app.kubernetes.io/component: cdc
+    spec:
+      imagePullSecrets:
+        - name: acr-secret
+      containers:
+        - name: cdc-consumer
+          image: cr6uluhllxv7asm.azurecr.io/cdc-consumer:latest
+          command: ["python", "-m", "cdc.consumer"]
+          args: []                     # Consumes all CDC topics
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 250m
+            limits:
+              memory: 512Mi
+              cpu: 500m
+          envFrom:
+            - secretRef:
+                name: pcgraf-credentials
+            - secretRef:
+                name: supabase-credentials
+            - configMapRef:
+                name: cdc-config
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import cdc.config; print('ok')"
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "from kafka import KafkaConsumer; print('ok')"
+            initialDelaySeconds: 15
+            periodSeconds: 30
+      terminationGracePeriodSeconds: 60  # Allow consumer to commit offsets
+---
+# ── HPA — autoscale consumers based on CPU ─────────────────────────────────
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cdc-consumer-hpa
+  namespace: treasury-cdc
+  labels:
+    app.kubernetes.io/part-of: treasury-copilot
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: cdc-consumer
+  minReplicas: 2
+  maxReplicas: 5                     # Max = number of partitions per topic
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

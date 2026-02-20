@@ -1,0 +1,5 @@
+# CDC pipeline dependencies (minimal — for Docker images)
+pymssql>=2.2.0
+kafka-python>=2.0.0
+httpx>=0.27.0
+python-dotenv>=1.0.0

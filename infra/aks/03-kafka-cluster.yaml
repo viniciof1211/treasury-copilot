@@ -1,0 +1,210 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Kafka Cluster — 3 brokers, RF=3, KRaft mode (no ZooKeeper)
+# Strimzi 0.50.x + Kafka 4.0.0
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── KafkaNodePool: controller nodes (KRaft metadata quorum) ───────────────
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: controller
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+spec:
+  replicas: 3
+  roles:
+    - controller
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: 10Gi
+        class: managed-csi
+        deleteClaim: false
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: "250m"
+    limits:
+      memory: 1Gi
+      cpu: "500m"
+  jvmOptions:
+    -Xms: 512m
+    -Xmx: 512m
+---
+# ── KafkaNodePool: broker nodes (data serving) ────────────────────────────
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: broker
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: treasury-kafka
+spec:
+  replicas: 3
+  roles:
+    - broker
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: 50Gi
+        class: managed-csi
+        deleteClaim: false
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: "500m"
+    limits:
+      memory: 2Gi
+      cpu: "1"
+  jvmOptions:
+    -Xms: 1024m
+    -Xmx: 1024m
+  template:
+    pod:
+      metadata:
+        labels:
+          app.kubernetes.io/part-of: treasury-copilot
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: strimzi.io/pool-name
+                      operator: In
+                      values:
+                        - broker
+                topologyKey: kubernetes.io/hostname
+---
+# ── Kafka cluster (KRaft mode — uses node pools above) ────────────────────
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: treasury-kafka
+  namespace: kafka
+  labels:
+    app.kubernetes.io/part-of: treasury-copilot
+    app.kubernetes.io/component: kafka-cluster
+  annotations:
+    strimzi.io/kraft: enabled
+    strimzi.io/node-pools: enabled
+spec:
+  kafka:
+    version: 4.0.0
+
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+      - name: tls
+        port: 9093
+        type: internal
+        tls: true
+
+    config:
+      # ── Replication ──────────────────────────────────────────────────
+      default.replication.factor: 3
+      min.insync.replicas: 2
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+
+      # ── Performance ──────────────────────────────────────────────────
+      num.partitions: 3
+      num.network.threads: 3
+      num.io.threads: 8
+
+      # ── Log retention (CDC events) ──────────────────────────────────
+      log.retention.hours: 168
+      log.retention.bytes: 10737418240
+      log.segment.bytes: 1073741824
+      log.cleanup.policy: delete
+
+      # ── Reliability ──────────────────────────────────────────────────
+      unclean.leader.election.enable: false
+      auto.create.topics.enable: false
+
+      # ── Compression ─────────────────────────────────────────────────
+      compression.type: lz4
+
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: kafka-metrics-config
+          key: kafka-metrics-config.yml
+
+  # ── Entity Operator (manages topics + users) ─────────────────────────────
+  entityOperator:
+    topicOperator:
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: "100m"
+        limits:
+          memory: 512Mi
+          cpu: "500m"
+    userOperator:
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: "100m"
+        limits:
+          memory: 512Mi
+          cpu: "500m"
+
+---
+# ── Kafka Metrics ConfigMap (for Prometheus scraping) ──────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-metrics-config
+  namespace: kafka
+  labels:
+    app.kubernetes.io/part-of: treasury-copilot
+data:
+  kafka-metrics-config.yml: |
+    lowercaseOutputName: true
+    lowercaseOutputLabelNames: true
+    rules:
+      # Broker metrics
+      - pattern: kafka.server<type=(.+), name=(.+), clientId=(.+), topic=(.+), partition=(.*)>Value
+        name: kafka_server_$1_$2
+        type: GAUGE
+        labels:
+          clientId: "$3"
+          topic: "$4"
+          partition: "$5"
+      - pattern: kafka.server<type=(.+), name=(.+), clientId=(.+), brokerHost=(.+), brokerPort=(.+)>Value
+        name: kafka_server_$1_$2
+        type: GAUGE
+        labels:
+          clientId: "$3"
+          broker: "$4:$5"
+      - pattern: kafka.server<type=(.+), name=(.+)>Value
+        name: kafka_server_$1_$2
+        type: GAUGE
+      # Controller metrics
+      - pattern: kafka.controller<type=(.+), name=(.+)>Value
+        name: kafka_controller_$1_$2
+        type: GAUGE
+      # Log metrics
+      - pattern: kafka.log<type=(.+), name=(.+), topic=(.+), partition=(.+)>Value
+        name: kafka_log_$1_$2
+        type: GAUGE
+        labels:
+          topic: "$3"
+          partition: "$4"
+      # Network metrics
+      - pattern: kafka.network<type=(.+), name=(.+), request=(.+)>Value
+        name: kafka_network_$1_$2
+        type: GAUGE
+        labels:
+          request: "$3"

@@ -32,6 +32,7 @@ def _download_hf_model():
 
 agent_image = (
     modal.Image.debian_slim(python_version="3.11")
+    .apt_install("freetds-dev")
     .pip_install(
         "langchain>=0.3.0",
         "langchain-openai>=0.3.0",
@@ -53,6 +54,8 @@ agent_image = (
         "uvicorn>=0.30.0",
         "httpx>=0.27.0",
         "python-dotenv>=1.0.0",
+        "pymssql>=2.2.0",
+        "kafka-python>=2.0.0",
     )
     .run_function(_download_hf_model)
     .add_local_dir(str(_AGENT_DIR), remote_path="/app/agent")
@@ -128,23 +131,34 @@ def web():
         sync_from_supabase,
         add_file_to_kb,
         get_vectorstore,
+        full_sync,
+        incremental_sync,
+        start_auto_sync,
+        get_sync_stats,
     )
     from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 
     # Lazy KB initialization — build on first search, not on startup
     _kb_initialized = False
+    _auto_sync_started = False
 
     def _ensure_kb():
-        nonlocal _kb_initialized
+        nonlocal _kb_initialized, _auto_sync_started
         if _kb_initialized:
             return
         vs = load_index()
         if vs is None:
-            logger.info("Building FAISS index from /app/doc...")
-            build_index_from_local_files("/app/doc")
+            logger.info("Building unified FAISS index (all sources)...")
+            os.environ.setdefault("DOC_DIR", "/app/doc")
+            full_sync()
             faiss_volume.commit()
             logger.info("FAISS index built and committed to volume")
         _kb_initialized = True
+        # Start 4-min auto-sync daemon
+        if not _auto_sync_started:
+            start_auto_sync()
+            _auto_sync_started = True
+            logger.info("KB auto-sync daemon started (4-min interval)")
 
     # ------------------------------------------------------------------
     # AG-UI SSE Streaming Endpoint
@@ -314,9 +328,31 @@ def web():
 
     async def kb_sync(request: Request):
         _ensure_kb()
-        count = sync_from_supabase()
+        result = full_sync()
         faiss_volume.commit()
-        return JSONResponse({"synced_chunks": count})
+        return JSONResponse(result)
+
+    async def kb_stats(request: Request):
+        """Return KB sync statistics: total chunks, sources, last sync time."""
+        _ensure_kb()
+        stats = get_sync_stats()
+        return JSONResponse(stats)
+
+    async def kb_cdc_refresh(request: Request):
+        """CDC-triggered incremental KB refresh. Called by CDC pipeline after commits."""
+        _ensure_kb()
+        body = await request.json()
+        table = body.get("table", "")
+        schema = body.get("schema", "tms")
+        rows = body.get("rows", [])
+        if not table or not rows:
+            # If no specific rows, do a full sync
+            result = full_sync()
+            faiss_volume.commit()
+            return JSONResponse({"mode": "full_sync", **result})
+        count = incremental_sync(table, schema, rows)
+        faiss_volume.commit()
+        return JSONResponse({"mode": "incremental", "table": table, "chunks_added": count})
 
     async def kb_add_file(request: Request):
         _ensure_kb()
@@ -491,6 +527,7 @@ def web():
     # Health
     # ------------------------------------------------------------------
     async def health(request: Request):
+        from agent.llm_fallback import get_fallback_status
         vs = get_vectorstore()
         return JSONResponse({
             "status": "ok",
@@ -502,6 +539,7 @@ def web():
                 "analytics": os.environ.get("ANALYTICS_AGENT_URL", "in-process"),
                 "data_service": os.environ.get("DATA_SERVICE_AGENT_URL", "in-process"),
             },
+            "llm_fallback": get_fallback_status(),
         })
 
     # ------------------------------------------------------------------
@@ -512,6 +550,8 @@ def web():
         # KB
         Route("/kb/search", kb_search, methods=["POST"]),
         Route("/kb/sync", kb_sync, methods=["POST"]),
+        Route("/kb/stats", kb_stats, methods=["GET"]),
+        Route("/kb/cdc_refresh", kb_cdc_refresh, methods=["POST"]),
         Route("/kb/add_file", kb_add_file, methods=["POST"]),
         Route("/kb/upload", kb_upload, methods=["POST"]),
         # Chat sessions

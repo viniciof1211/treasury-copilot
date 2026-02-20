@@ -1,0 +1,107 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# CDC Producer — CronJob that polls PcGraf every 5 min
+# Also includes a long-running Deployment for --daemon mode
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Option A: CronJob (recommended — K8s manages scheduling)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cdc-producer-poll
+  namespace: treasury-cdc
+  labels:
+    app.kubernetes.io/name: cdc-producer
+    app.kubernetes.io/part-of: treasury-copilot
+    app.kubernetes.io/component: cdc
+spec:
+  schedule: "*/5 * * * *"          # Every 5 minutes
+  concurrencyPolicy: Forbid         # Skip if previous run still active
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 120
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 240     # Kill if running > 4 min
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: cdc-producer
+            app.kubernetes.io/component: cdc
+        spec:
+          imagePullSecrets:
+            - name: acr-secret
+          restartPolicy: OnFailure
+          containers:
+            - name: cdc-producer
+              image: cr6uluhllxv7asm.azurecr.io/cdc-producer:latest
+              command: ["python", "-m", "cdc.runner"]
+              args: []                # One-shot poll all tables
+              resources:
+                requests:
+                  memory: 256Mi
+                  cpu: 250m
+                limits:
+                  memory: 512Mi
+                  cpu: 500m
+              envFrom:
+                - secretRef:
+                    name: pcgraf-credentials
+                - secretRef:
+                    name: supabase-credentials
+                - configMapRef:
+                    name: cdc-config
+---
+# Option B: Daemon Deployment (alternative — app manages its own 5-min loop)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cdc-producer-daemon
+  namespace: treasury-cdc
+  labels:
+    app.kubernetes.io/name: cdc-producer-daemon
+    app.kubernetes.io/part-of: treasury-copilot
+    app.kubernetes.io/component: cdc
+  annotations:
+    note: "Use EITHER the CronJob (Option A) OR this Deployment (Option B), not both"
+spec:
+  replicas: 0                        # Set to 1 to enable daemon mode, 0 to use CronJob
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cdc-producer-daemon
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cdc-producer-daemon
+        app.kubernetes.io/component: cdc
+    spec:
+      imagePullSecrets:
+        - name: acr-secret
+      containers:
+        - name: cdc-producer
+          image: cr6uluhllxv7asm.azurecr.io/cdc-producer:latest
+          command: ["python", "-m", "cdc.runner"]
+          args: ["--daemon", "--interval", "300"]
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 250m
+            limits:
+              memory: 512Mi
+              cpu: 500m
+          envFrom:
+            - secretRef:
+                name: pcgraf-credentials
+            - secretRef:
+                name: supabase-credentials
+            - configMapRef:
+                name: cdc-config
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import cdc.config; print('ok')"
+            initialDelaySeconds: 30
+            periodSeconds: 60
+      terminationGracePeriodSeconds: 30

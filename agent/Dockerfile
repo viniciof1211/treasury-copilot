@@ -23,9 +23,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies (including FreeTDS for pymssql / PcGraf SQL Server)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    freetds-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python deps
@@ -35,7 +36,7 @@ RUN pip install --no-cache-dir -r /app/agent/requirements.txt
 # Pre-download the sentence-transformers model
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
 
-# Copy agent code and docs
+# Copy agent code (includes cdc/ package) and docs
 COPY agent/ /app/agent/
 COPY doc/ /app/doc/
 
