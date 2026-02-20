@@ -26,3 +26,13 @@ dist-ssr
 doc/*.xlsx
 doc/*.xls
 ~$*
+
+# Python / Agent
+agent/.env
+agent/__pycache__/
+agent/*.pyc
+__pycache__/
+*.pyc
+.venv/
+venv/
+treasury_faiss_index/

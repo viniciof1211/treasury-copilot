@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, Database, Briefcase, Settings, Landmark, Target, ShoppingCart, Receipt, Presentation } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Database, Briefcase, Settings, Landmark, Target, ShoppingCart, Receipt, Presentation, GitBranch } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
 const navigation = [
@@ -11,6 +11,7 @@ const navigation = [
   { name: 'Junta Directiva', href: '/board', icon: Presentation },
   { name: 'AI Chat', href: '/chat', icon: MessageSquare },
   { name: 'Fuentes de Datos', href: '/data', icon: Database },
+  { name: 'Modelo de Datos', href: '/data-model', icon: GitBranch },
   { name: 'Proyectos', href: '/projects', icon: Briefcase },
   { name: 'Admin', href: '/admin', icon: Settings },
 ];

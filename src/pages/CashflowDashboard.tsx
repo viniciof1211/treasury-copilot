@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   TrendingUp, TrendingDown, AlertTriangle, Lightbulb, RefreshCw, BarChart3,
   Wallet, CreditCard, Building2, CalendarDays, Target, ShieldCheck, Clock,
-  Filter, CheckCircle2, XCircle, AlertOctagon, Banknote, Download,
+  Filter, CheckCircle2, XCircle, AlertOctagon, Banknote, Download, Activity,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Layout } from '../components/layout/Layout';
@@ -57,6 +57,7 @@ import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend, ComposedChart, Line, ReferenceLine, PieChart, Pie, Cell,
 } from 'recharts';
+import { FilterableTable, type ColumnDef } from '../components/ui/FilterableTable';
 
 export function CashflowDashboard() {
   const [loading, setLoading] = useState(true);
@@ -123,7 +124,7 @@ export function CashflowDashboard() {
     return d;
   }, [cxpAll, cutoff, buFilter, provFilter, negocioFilter]);
   const flujo = useMemo(() => {
-    let d = flujoAll;
+    let d = flujoAll.filter(r => r.operacion && String(r.operacion).trim() !== '');
     if (cutoff) d = d.filter(r => (r.vencimiento || r.created_at) >= cutoff);
     if (buFilter !== 'all') d = d.filter(r => r.compania === buFilter);
     return d;
@@ -307,6 +308,96 @@ export function CashflowDashboard() {
     }
     return weeks;
   }, [cxp]);
+
+  // ── Predictive Analytics ─────────────────────────────────────────────────────
+
+  // P1: Cashflow Volatility — monthly std dev of net cashflow
+  const cashflowVolatility = useMemo(() => {
+    const monthlyNet: Record<string, number> = {};
+    flujo.forEach(r => { const k = (r.vencimiento || r.created_at || '').slice(0, 7); if (k) monthlyNet[k] = (monthlyNet[k] || 0) + (Number(r.cuota) || 0); });
+    cxp.forEach(r => { const k = (r.vencimiento_fecha || r.created_at || '').slice(0, 7); if (k) monthlyNet[k] = (monthlyNet[k] || 0) - (Number(r.monto_usd) || 0); });
+    const vals = Object.entries(monthlyNet).sort(([a], [b]) => a.localeCompare(b));
+    if (vals.length < 2) return [];
+    const mean = vals.reduce((s, [, v]) => s + v, 0) / vals.length;
+    let cumVol = 0;
+    return vals.map(([mo, net]) => {
+      const dev = net - mean;
+      cumVol += Math.abs(dev);
+      return { month: mo, label: formatMonthYear(mo + '-01'), net, mean, deviation: dev, cumVolatility: cumVol / vals.length };
+    });
+  }, [cxp, flujo]);
+
+  // P2: CxP Forecast — SMA-3 egresos projection
+  const egresosForecast = useMemo(() => {
+    if (egresosTrend.length < 2) return [];
+    const hist = egresosTrend.map(e => ({ ...e, type: 'real' as const }));
+    const w = Math.min(3, hist.length);
+    const avg = hist.slice(-w).reduce((s, e) => s + e.total, 0) / w;
+    const last = hist[hist.length - 1].month;
+    const fc: typeof hist = [];
+    for (let i = 1; i <= 4; i++) {
+      const d = new Date(last + '-01'); d.setMonth(d.getMonth() + i);
+      const mo = d.toISOString().slice(0, 7);
+      fc.push({ month: mo, label: formatMonthYear(mo + '-01'), total: avg * (1 + i * 0.005), type: 'forecast' as const });
+    }
+    return [...hist, ...fc];
+  }, [egresosTrend]);
+
+  // P3: Provider Risk Score — weighted by amount * aging days
+  const providerRisk = useMemo(() => {
+    const m: Record<string, { name: string; amount: number; avgDays: number; count: number; riskScore: number }> = {};
+    const now = new Date();
+    cxp.forEach(r => {
+      const p = r.proveedor || 'Desconocido';
+      const amt = Number(r.monto_usd) || 0;
+      const days = r.vencimiento_fecha ? Math.max(0, (now.getTime() - new Date(r.vencimiento_fecha).getTime()) / 86400000) : 0;
+      if (!m[p]) m[p] = { name: p, amount: 0, avgDays: 0, count: 0, riskScore: 0 };
+      m[p].amount += amt;
+      m[p].avgDays += days;
+      m[p].count++;
+      m[p].riskScore += amt * Math.max(1, days / 30);
+    });
+    return Object.values(m)
+      .map(v => ({ ...v, avgDays: v.count > 0 ? v.avgDays / v.count : 0, name: v.name.length > 20 ? v.name.slice(0, 17) + '...' : v.name }))
+      .sort((a, b) => b.riskScore - a.riskScore).slice(0, 10);
+  }, [cxp]);
+
+  // P4: Coverage Ratio Trend — monthly ratio evolution
+  const coverageTrend = useMemo(() => {
+    const monthIn: Record<string, number> = {};
+    const monthOut: Record<string, number> = {};
+    flujo.forEach(r => { const k = (r.vencimiento || r.created_at || '').slice(0, 7); if (k) monthIn[k] = (monthIn[k] || 0) + (Number(r.cuota) || 0); });
+    cxp.forEach(r => { const k = (r.vencimiento_fecha || r.created_at || '').slice(0, 7); if (k) monthOut[k] = (monthOut[k] || 0) + (Number(r.monto_usd) || 0); });
+    const months = [...new Set([...Object.keys(monthIn), ...Object.keys(monthOut)])].sort();
+    return months.map(mo => {
+      const inflow = monthIn[mo] || 0;
+      const outflow = monthOut[mo] || 0;
+      return { month: mo, label: formatMonthYear(mo + '-01'), ratio: outflow > 0 ? inflow / outflow : inflow > 0 ? 5 : 0, inflow, outflow };
+    });
+  }, [cxp, flujo]);
+
+  // ── FilterableTable column defs ─────────────────────────────────────────────
+  const cxpColumns: ColumnDef<CxPItem>[] = useMemo(() => [
+    { key: 'proveedor', header: 'Proveedor', render: (r) => <span className="font-medium text-gray-900 max-w-[180px] truncate block">{r.proveedor || '—'}</span>, filterType: 'text' },
+    { key: 'empresa', header: 'Empresa', render: (r) => <span className="text-gray-600">{r.empresa || '—'}</span>, filterType: 'select' },
+    { key: 'monto_usd', header: 'Monto $', align: 'right', render: (r) => <span className="font-semibold tabular-nums">{formatCurrency(Number(r.monto_usd) || 0)}</span>, accessor: (r) => Number(r.monto_usd) || 0 },
+    { key: 'vencimiento_fecha', header: 'Vencimiento', render: (r) => { const isOv = r.vencimiento_fecha && new Date(r.vencimiento_fecha) < now; return <span className={isOv ? 'text-red-600 font-bold' : 'text-gray-600'}>{r.vencimiento_fecha ? formatShortDate(r.vencimiento_fecha) : '—'}{isOv && <span className="ml-1 text-[8px] bg-red-100 text-red-700 px-1 rounded">VENCIDO</span>}</span>; }, accessor: (r) => r.vencimiento_fecha || '' },
+    { key: 'prioridad', header: 'Prioridad', render: (r) => <Badge variant={String(r.prioridad).includes('1') ? 'error' : String(r.prioridad).includes('2') ? 'warning' : 'default'}>{getPriorityLabel(r.prioridad)}</Badge>, filterType: 'select', accessor: (r) => getPriorityLabel(r.prioridad) },
+    { key: 'clasificacion', header: 'Clasificación', render: (r) => <span className="text-gray-500">{r.clasificacion || '—'}</span>, filterType: 'select' },
+    { key: 'negocio', header: 'Negocio', render: (r) => <span className="text-gray-500">{r.negocio || '—'}</span>, filterType: 'select' },
+  ], [now]);
+
+  const flujoColumns: ColumnDef<FlujoItem>[] = useMemo(() => [
+    { key: 'operacion', header: 'Operación', render: (r) => <span className="font-medium text-gray-900 max-w-[200px] truncate block" title={r.operacion || ''}>{r.operacion || '—'}</span>, filterType: 'text' },
+    { key: 'compania', header: 'Compañía', render: (r) => <span className="text-gray-600 max-w-[140px] truncate block" title={r.compania || ''}>{r.compania || '—'}</span>, filterType: 'select' },
+    { key: 'banco', header: 'Banco', render: (r) => <span className="text-gray-600">{r.banco || '—'}</span>, filterType: 'select' },
+    { key: 'tipo', header: 'Tipo', render: (r) => <Badge variant={r.tipo === 'Largo Plazo' ? 'success' : r.tipo === 'Capital Trabajo' ? 'warning' : 'default'}>{r.tipo || '—'}</Badge>, filterType: 'select' },
+    { key: 'cuota', header: 'Cuota', align: 'right', render: (r) => { const cur = normalizeCurrency(r.moneda); return <span className={`font-semibold tabular-nums ${(Number(r.cuota) || 0) >= (cur === 'CRC' ? 50000000 : 100000) ? 'text-emerald-700' : ''}`}>{formatCurrency(Number(r.cuota) || 0, cur)}</span>; }, accessor: (r) => Number(r.cuota) || 0 },
+    { key: 'principal', header: 'Principal', align: 'right', render: (r) => <span className="tabular-nums text-gray-600">{formatCurrency(Number(r.principal) || 0, normalizeCurrency(r.moneda))}</span>, accessor: (r) => Number(r.principal) || 0 },
+    { key: 'intereses', header: 'Intereses', align: 'right', render: (r) => <span className="tabular-nums text-gray-500">{formatCurrency(Number(r.intereses) || 0, normalizeCurrency(r.moneda))}</span>, accessor: (r) => Number(r.intereses) || 0 },
+    { key: 'vencimiento', header: 'Vencimiento', render: (r) => <span className="text-gray-600">{r.vencimiento ? formatShortDate(r.vencimiento) : '—'}</span>, accessor: (r) => r.vencimiento || '' },
+    { key: 'moneda', header: 'Moneda', render: (r) => <Badge variant={normalizeCurrency(r.moneda) === 'USD' ? 'info' : 'default'}>{normalizeCurrency(r.moneda)}</Badge>, filterType: 'select', accessor: (r) => normalizeCurrency(r.moneda) },
+  ], []);
 
   // ── Language toggle ─────────────────────────────────────────────────────────
   const [lang, setLang] = useState<'es' | 'en'>(() => (localStorage.getItem('narrative_lang') as 'es' | 'en') || 'es');
@@ -571,7 +662,7 @@ export function CashflowDashboard() {
               </Card>
             </div>
 
-            {/* CxP detail table */}
+            {/* CxP detail table with column filters */}
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
@@ -582,77 +673,28 @@ export function CashflowDashboard() {
                 </div>
               </CardHeader>
               <CardContent>
-                {cxp.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead><tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wider">
-                        <th className="pb-2 pr-3">Proveedor</th><th className="pb-2 pr-3">Empresa</th><th className="pb-2 pr-3 text-right">Monto $</th>
-                        <th className="pb-2 pr-3">Vencimiento</th><th className="pb-2 pr-3">Prioridad</th><th className="pb-2 pr-3">Clasificación</th><th className="pb-2">Negocio</th>
-                      </tr></thead>
-                      <tbody className="divide-y divide-gray-50">
-                        {cxp.slice(0, 20).map((item, idx) => {
-                          const isOverdue = new Date(item.vencimiento_fecha) < now;
-                          return (
-                            <tr key={idx} className="hover:bg-gray-50/50 cursor-pointer" onDoubleClick={() => { setDetailType('cxp'); setDetailRecord(item as unknown as Record<string, unknown>); }} title="Doble clic para ver/editar detalle">
-                              <td className="py-2 pr-3 font-medium text-gray-900 max-w-[180px] truncate text-xs">{item.proveedor || '—'}</td>
-                              <td className="py-2 pr-3 text-gray-600 text-xs">{item.empresa || '—'}</td>
-                              <td className="py-2 pr-3 text-right font-semibold tabular-nums text-xs">{formatCurrency(Number(item.monto_usd) || 0)}</td>
-                              <td className={`py-2 pr-3 text-xs ${isOverdue ? 'text-red-600 font-bold' : 'text-gray-600'}`}>
-                                {item.vencimiento_fecha ? formatShortDate(item.vencimiento_fecha) : '—'}
-                                {isOverdue && <span className="ml-1 text-[8px] bg-red-100 text-red-700 px-1 rounded">VENCIDO</span>}
-                              </td>
-                              <td className="py-2 pr-3"><Badge variant={String(item.prioridad).includes('1') ? 'error' : String(item.prioridad).includes('2') ? 'warning' : 'default'}>{getPriorityLabel(item.prioridad)}</Badge></td>
-                              <td className="py-2 pr-3 text-gray-500 text-xs">{item.clasificacion || '—'}</td>
-                              <td className="py-2 text-gray-500 text-xs">{item.negocio || '—'}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                    {cxp.length > 20 && <p className="text-xs text-gray-400 mt-2 text-center">Mostrando 20 de {cxp.length}.</p>}
-                    <p className="text-xs text-gray-400 mt-1 text-center italic">Doble clic en una fila para ver/editar detalle completo</p>
-                  </div>
-                ) : <EmptyState text="Sin CxP." />}
+                <FilterableTable<CxPItem>
+                  data={cxp}
+                  columns={cxpColumns}
+                  maxRows={30}
+                  onRowDoubleClick={(item) => { setDetailType('cxp'); setDetailRecord(item as unknown as Record<string, unknown>); }}
+                  emptyText="Sin CxP."
+                />
               </CardContent>
             </Card>
 
-            {/* Ingresos (Flujo) detail table */}
+            {/* Ingresos (Flujo) detail table with column filters */}
             <Card>
               <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Banknote className="w-4 h-4 text-emerald-600" />Detalle de Ingresos — Cuotas y Operaciones{buFilter !== 'all' && <Badge variant="info">{buFilter}</Badge>}</CardTitle></CardHeader>
               <CardContent>
-                {flujo.length > 0 ? (
-                  <div className="overflow-x-auto max-h-[480px] overflow-y-auto">
-                    <table className="w-full text-sm">
-                      <thead className="sticky top-0 bg-white z-10"><tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wider">
-                        <th className="pb-2 pr-3">Operación</th><th className="pb-2 pr-3">Compañía</th><th className="pb-2 pr-3">Banco</th>
-                        <th className="pb-2 pr-3">Tipo</th><th className="pb-2 pr-3 text-right">Cuota</th><th className="pb-2 pr-3 text-right">Principal</th>
-                        <th className="pb-2 pr-3 text-right">Intereses</th><th className="pb-2 pr-3">Vencimiento</th><th className="pb-2">Moneda</th>
-                      </tr></thead>
-                      <tbody className="divide-y divide-gray-50">
-                        {flujo.slice(0, 50).map((item, idx) => {
-                          const cuota = Number(item.cuota) || 0;
-                          const cur = normalizeCurrency(item.moneda);
-                          const isLarge = cuota >= (cur === 'CRC' ? 50000000 : 100000);
-                          return (
-                            <tr key={idx} className="hover:bg-emerald-50/40 cursor-pointer" onDoubleClick={() => { setDetailType('flujo'); setDetailRecord(item as unknown as Record<string, unknown>); }} title="Doble clic para ver/editar detalle">
-                              <td className="py-2 pr-3 font-medium text-gray-900 max-w-[200px] truncate text-xs" title={item.operacion || ''}>{item.operacion || '—'}</td>
-                              <td className="py-2 pr-3 text-gray-600 text-xs max-w-[140px] truncate" title={item.compania || ''}>{item.compania || '—'}</td>
-                              <td className="py-2 pr-3 text-gray-600 text-xs">{item.banco || '—'}</td>
-                              <td className="py-2 pr-3"><Badge variant={item.tipo === 'Largo Plazo' ? 'success' : item.tipo === 'Capital Trabajo' ? 'warning' : 'default'}>{item.tipo || '—'}</Badge></td>
-                              <td className={`py-2 pr-3 text-right font-semibold tabular-nums text-xs ${isLarge ? 'text-emerald-700' : ''}`}>{formatCurrency(cuota, cur)}</td>
-                              <td className="py-2 pr-3 text-right tabular-nums text-xs text-gray-600">{formatCurrency(Number(item.principal) || 0, cur)}</td>
-                              <td className="py-2 pr-3 text-right tabular-nums text-xs text-gray-500">{formatCurrency(Number(item.intereses) || 0, cur)}</td>
-                              <td className="py-2 pr-3 text-xs text-gray-600">{item.vencimiento ? formatShortDate(item.vencimiento) : '—'}</td>
-                              <td className="py-2 text-xs"><Badge variant={cur === 'USD' ? 'info' : 'default'}>{cur}</Badge></td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                    {flujo.length > 50 && <p className="text-xs text-gray-400 mt-2 text-center">Mostrando 50 de {flujo.length} registros.</p>}
-                    <p className="text-xs text-gray-400 mt-1 text-center italic">Doble clic en una fila para ver/editar detalle completo</p>
-                  </div>
-                ) : <EmptyState text='Sin ingresos. Ingesta "Flujo Semanal" o "Control de Operaciones" en Fuentes de Datos.' />}
+                <FilterableTable<FlujoItem>
+                  data={flujo}
+                  columns={flujoColumns}
+                  maxRows={50}
+                  hoverClass="hover:bg-emerald-50/40"
+                  onRowDoubleClick={(item) => { setDetailType('flujo'); setDetailRecord(item as unknown as Record<string, unknown>); }}
+                  emptyText='Sin ingresos. Ingesta "Flujo Semanal" o "Control de Operaciones" en Fuentes de Datos.'
+                />
               </CardContent>
             </Card>
 
@@ -723,6 +765,116 @@ export function CashflowDashboard() {
                       </ComposedChart>
                     </ResponsiveContainer>
                   ) : <EmptyState text="Sin datos de egresos." />}
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* ── Predictive Financial Treasury Analytics ─────────────── */}
+            <div className="border-t border-gray-200 pt-6 mt-2">
+              <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+                <Activity className="w-5 h-5 text-[#1A4A28]" />
+                Predictive Financial Treasury Analytics
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* P1: Cashflow Volatility */}
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><TrendingDown className="w-4 h-4 text-red-500" />Volatilidad de Cashflow Neto</CardTitle></CardHeader>
+                <CardContent>
+                  {cashflowVolatility.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={280}>
+                      <ComposedChart data={cashflowVolatility}>
+                        <defs>
+                          <linearGradient id="volGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#8B5CF6" stopOpacity={0.2} /><stop offset="95%" stopColor="#8B5CF6" stopOpacity={0} /></linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="label" stroke="#9ca3af" fontSize={9} />
+                        <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
+                        <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <ReferenceLine y={0} stroke={ARA_COLORS.red} strokeDasharray="4 4" />
+                        <Area type="monotone" dataKey="deviation" stroke="#8B5CF6" strokeWidth={1.5} fill="url(#volGrad)" name="Desviación $" />
+                        <Line type="monotone" dataKey="net" stroke={ARA_COLORS.primary} strokeWidth={2} dot={{ r: 2 }} name="Neto Real $" />
+                        <Line type="monotone" dataKey="mean" stroke={ARA_COLORS.gold} strokeWidth={1.5} strokeDasharray="5 5" dot={false} name="Media $" />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  ) : <EmptyState text="Se requieren al menos 2 meses de datos." />}
+                  <p className="text-[9px] text-gray-400 text-center mt-1">Desviación del cashflow neto respecto a la media — alta volatilidad = riesgo de liquidez</p>
+                </CardContent>
+              </Card>
+
+              {/* P2: Egresos Forecast */}
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Target className="w-4 h-4 text-[#1A4A28]" />Pronóstico de Egresos (SMA-3)</CardTitle></CardHeader>
+                <CardContent>
+                  {egresosForecast.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={280}>
+                      <ComposedChart data={egresosForecast}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="label" stroke="#9ca3af" fontSize={9} />
+                        <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
+                        <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={tooltipStyle} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <Bar dataKey="total" name="Egresos $" radius={[3, 3, 0, 0]}>
+                          {egresosForecast.map((e, i) => <Cell key={i} fill={e.type === 'forecast' ? ARA_COLORS.gold : ARA_COLORS.red} opacity={e.type === 'forecast' ? 0.6 : 0.8} />)}
+                        </Bar>
+                        <Line type="monotone" dataKey="total" stroke={ARA_COLORS.orange} strokeWidth={2} dot={{ r: 2 }} name="Tendencia" />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  ) : <EmptyState text="Sin datos de egresos para pronóstico." />}
+                  <p className="text-[9px] text-gray-400 text-center mt-1">Barras doradas = pronóstico basado en promedio móvil simple (SMA-3)</p>
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* P3: Provider Risk Score */}
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><AlertTriangle className="w-4 h-4 text-orange-500" />Score de Riesgo por Proveedor</CardTitle></CardHeader>
+                <CardContent>
+                  {providerRisk.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={300}>
+                      <BarChart data={providerRisk} layout="vertical" margin={{ left: 10 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis type="number" stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
+                        <YAxis type="category" dataKey="name" stroke="#9ca3af" fontSize={8} width={120} />
+                        <Tooltip formatter={(v: number, name: string) => name.includes('Días') ? `${v.toFixed(0)} días` : formatCurrency(v)} contentStyle={tooltipStyle} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <Bar dataKey="riskScore" fill={ARA_COLORS.red} name="Risk Score $" radius={[0, 4, 4, 0]} opacity={0.7} />
+                        <Bar dataKey="amount" fill={ARA_COLORS.primary} name="Monto $" radius={[0, 4, 4, 0]} opacity={0.5} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : <EmptyState text="Sin datos de proveedores." />}
+                  <p className="text-[9px] text-gray-400 text-center mt-1">Risk Score = Monto × Factor de Aging. Mayor score = mayor riesgo de impago</p>
+                </CardContent>
+              </Card>
+
+              {/* P4: Coverage Ratio Trend */}
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><ShieldCheck className="w-4 h-4 text-[#1A4A28]" />Evolución Ratio de Cobertura</CardTitle></CardHeader>
+                <CardContent>
+                  {coverageTrend.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={300}>
+                      <ComposedChart data={coverageTrend}>
+                        <defs>
+                          <linearGradient id="covGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#22c55e" stopOpacity={0.2} /><stop offset="95%" stopColor="#22c55e" stopOpacity={0} /></linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="label" stroke="#9ca3af" fontSize={9} />
+                        <YAxis yAxisId="left" stroke="#9ca3af" fontSize={10} />
+                        <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" fontSize={10} tickFormatter={v => formatCompactCurrency(v)} />
+                        <Tooltip contentStyle={tooltipStyle} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <ReferenceLine yAxisId="left" y={1} stroke={ARA_COLORS.red} strokeDasharray="4 4" label={{ value: '1.0x', position: 'right', fontSize: 9, fill: ARA_COLORS.red }} />
+                        <ReferenceLine yAxisId="left" y={1.5} stroke={ARA_COLORS.gold} strokeDasharray="4 4" label={{ value: '1.5x', position: 'right', fontSize: 9, fill: ARA_COLORS.gold }} />
+                        <Area yAxisId="left" type="monotone" dataKey="ratio" stroke="#22c55e" strokeWidth={2.5} fill="url(#covGrad)" name="Ratio Cobertura" />
+                        <Bar yAxisId="right" dataKey="inflow" fill={ARA_COLORS.primary} name="Ingresos $" radius={[2, 2, 0, 0]} opacity={0.3} />
+                        <Bar yAxisId="right" dataKey="outflow" fill={ARA_COLORS.red} name="Egresos $" radius={[2, 2, 0, 0]} opacity={0.3} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  ) : <EmptyState text="Sin datos para ratio de cobertura." />}
+                  <p className="text-[9px] text-gray-400 text-center mt-1">Ratio &lt; 1.0 = déficit · 1.0-1.5 = ajustado · &gt; 1.5 = saludable</p>
                 </CardContent>
               </Card>
             </div>

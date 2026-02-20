@@ -2,7 +2,9 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   ShoppingCart, Package, AlertTriangle, Truck, Clock, BarChart3, TrendingUp,
   TrendingDown, RefreshCw, Lightbulb, DollarSign, Layers, Shield, Globe,
-  BookOpen, Search, ChevronDown, ChevronUp, Scale, Anchor, Warehouse, FileText,
+  BookOpen, Search, ChevronDown, ChevronUp, Scale, Anchor, Warehouse, FileText, Activity, Target, ShieldCheck,
+  Database, Server, Wifi, WifiOff,
+  Filter, Building2, Calendar, Edit3, Save, X, Download, Upload, History, CheckCircle2, Pencil,
 } from 'lucide-react';
 import { Layout } from '../components/layout/Layout';
 import { KPICard } from '../components/dashboard/KPICard';
@@ -18,8 +20,10 @@ import { supabase } from '../lib/supabase';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
   PieChart, Pie, Cell, ComposedChart, Line, Area, RadarChart, Radar, PolarGrid,
-  PolarAngleAxis, PolarRadiusAxis, Treemap,
+  PolarAngleAxis, PolarRadiusAxis, Treemap, AreaChart, ReferenceLine,
 } from 'recharts';
+import { FilterableTable, type ColumnDef } from '../components/ui/FilterableTable';
+import { pcgrafHealth, pcgrafDatabases, pcgrafQuery, pcgrafBackup, pcgrafBackupList, type PcGrafHealthResult } from '../lib/pcgraf';
 
 const CHART_COLORS = ['#1A4A28', '#2D6A3F', '#C9A84C', '#3B82F6', '#8B5CF6', '#EC4899', '#F59E0B', '#EF4444', '#06B6D4', '#84CC16'];
 const ABC_COLORS: Record<string, string> = { A: '#1A4A28', B: '#C9A84C', C: '#9CA3AF' };
@@ -185,6 +189,18 @@ export function ComprasDashboard() {
   const [lastRefresh, setLastRefresh] = useState(new Date());
   const [provFilter, setProvFilter] = useState('all');
   const [abcFilter, setAbcFilter] = useState('all');
+  const [empresaFilter, setEmpresaFilter] = useState('all');
+  const [buFilter, setBuFilter] = useState('all');
+  const [periodoFilter, setPeriodoFilter] = useState('all');
+  const [tipoCompraFilter, setTipoCompraFilter] = useState('all');
+  const [bodegaFilter, setBodegaFilter] = useState('all');
+  const [showExcludedBodegas, setShowExcludedBodegas] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  // Curation state
+  const [showCuration, setShowCuration] = useState(false);
+  const [editingRow, setEditingRow] = useState<string | null>(null);
+  const [editValues, setEditValues] = useState<Record<string, string>>({});
+  const [curationSaving, setCurationSaving] = useState(false);
   const [detailRecord, setDetailRecord] = useState<Record<string, unknown> | null>(null);
   // Valor Nacionalizado state
   const [showGlossary, setShowGlossary] = useState(false);
@@ -194,6 +210,38 @@ export function ComprasDashboard() {
   const [nacSortKey, setNacSortKey] = useState<'valorNacionalizado' | 'markup' | 'fob' | 'dai' | 'iva'>('valorNacionalizado');
   const [nacPage, setNacPage] = useState(0);
   const NAC_PAGE_SIZE = 25;
+
+  // PcGraf ERP state
+  const [pcgrafStatus, setPcgrafStatus] = useState<PcGrafHealthResult | null>(null);
+  const [pcgrafDbs, setPcgrafDbs] = useState<string[]>([]);
+  const [pcgrafSelectedDb, setPcgrafSelectedDb] = useState('');
+  const [pcgrafSql, setPcgrafSql] = useState('SELECT TOP 100 * FROM ');
+  const [pcgrafResult, setPcgrafResult] = useState<{ rows: Record<string, unknown>[]; columns: string[]; row_count: number; error?: string } | null>(null);
+  const [pcgrafLoading, setPcgrafLoading] = useState(false);
+  const [showPcgraf, setShowPcgraf] = useState(false);
+
+  const checkPcgraf = useCallback(async () => {
+    const health = await pcgrafHealth();
+    setPcgrafStatus(health);
+    if (health.status === 'connected') {
+      const dbs = await pcgrafDatabases();
+      setPcgrafDbs(dbs);
+    }
+  }, []);
+
+  const runPcgrafQuery = useCallback(async () => {
+    if (!pcgrafSql.trim()) return;
+    setPcgrafLoading(true);
+    setPcgrafResult(null);
+    try {
+      const result = await pcgrafQuery(pcgrafSql, pcgrafSelectedDb);
+      setPcgrafResult(result);
+    } catch (e) {
+      setPcgrafResult({ rows: [], columns: [], row_count: 0, error: String(e) });
+    } finally {
+      setPcgrafLoading(false);
+    }
+  }, [pcgrafSql, pcgrafSelectedDb]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -242,18 +290,104 @@ export function ComprasDashboard() {
     finally { setCabysLoading(false); }
   }, []);
 
+  // ── Local vs International pattern detection ───────────────────────────
+  const enrichedData = useMemo(() => {
+    return mrpAll.map(r => {
+      // If tipo_compra already set, use it
+      if (r.tipo_compra && r.tipo_compra !== 'Sin Definir') return r;
+      // Pattern detection: determine local vs international
+      let detected: string = 'Sin Definir';
+      const origen = (r.origen || '').toLowerCase();
+      const tipo = (r.tipo_item || '').toLowerCase();
+      const prov = (r.proveedor || '').toLowerCase();
+      const lt = Number(r.lead_time_dias) || 0;
+      // Explicit tipo_item
+      if (tipo === 'importado') detected = 'Internacional';
+      else if (tipo === 'local') detected = 'Local';
+      // Origin-based
+      else if (['europa', 'asia', 'china', 'america', 'usa', 'eeuu', 'mexico', 'ecuador', 'brasil', 'india', 'taiwan', 'japon', 'alemania', 'italia', 'españa'].some(o => origen.includes(o))) detected = 'Internacional';
+      else if (['local', 'costa rica', 'cr', 'nacional'].some(o => origen.includes(o))) detected = 'Local';
+      // Lead time heuristic: >30 days likely international
+      else if (lt > 30) detected = 'Internacional';
+      else if (lt > 0 && lt <= 7) detected = 'Local';
+      // Provider name patterns
+      else if (['import', 'trading', 'overseas', 'international', 'global', 'gmbh', 'ltd', 'inc', 'corp'].some(k => prov.includes(k))) detected = 'Internacional';
+      return { ...r, tipo_compra: detected };
+    });
+  }, [mrpAll]);
+
   // ── Filters ──────────────────────────────────────────────────────────────
   const data = useMemo(() => {
-    let d = mrpAll;
+    let d = enrichedData;
+    if (!showExcludedBodegas) d = d.filter(r => !r.bodega_excluida);
+    if (empresaFilter !== 'all') d = d.filter(r => (r.empresa || 'Sin Empresa') === empresaFilter);
+    if (buFilter !== 'all') d = d.filter(r => (r.unidad_negocio || 'Sin Unidad') === buFilter);
     if (provFilter !== 'all') d = d.filter(r => r.proveedor === provFilter);
     if (abcFilter !== 'all') d = d.filter(r => r.abc_class === abcFilter);
+    if (tipoCompraFilter !== 'all') d = d.filter(r => (r.tipo_compra || 'Sin Definir') === tipoCompraFilter);
+    if (bodegaFilter !== 'all') d = d.filter(r => (r.bodega || 'Sin Bodega') === bodegaFilter);
+    if (periodoFilter !== 'all') {
+      const [y, m] = periodoFilter.split('-').map(Number);
+      d = d.filter(r => (r.periodo_anio || 0) === y && (r.periodo_mes || 0) === m);
+    }
     return d;
-  }, [mrpAll, provFilter, abcFilter]);
+  }, [enrichedData, provFilter, abcFilter, empresaFilter, buFilter, periodoFilter, tipoCompraFilter, bodegaFilter, showExcludedBodegas]);
 
+  // ── Filter option lists (derived from full dataset) ─────────────────────
   const proveedores = useMemo(() => {
-    const s = new Set(mrpAll.map(r => r.proveedor).filter(Boolean));
+    const s = new Set(enrichedData.map(r => r.proveedor).filter(Boolean));
     return Array.from(s).sort();
-  }, [mrpAll]);
+  }, [enrichedData]);
+
+  const empresas = useMemo(() => {
+    const s = new Set(enrichedData.map(r => r.empresa || 'Sin Empresa').filter(Boolean));
+    return Array.from(s).sort();
+  }, [enrichedData]);
+
+  const unidadesNegocio = useMemo(() => {
+    const s = new Set(enrichedData.map(r => r.unidad_negocio || 'Sin Unidad').filter(Boolean));
+    return Array.from(s).sort();
+  }, [enrichedData]);
+
+  const bodegas = useMemo(() => {
+    const s = new Set(enrichedData.map(r => r.bodega || 'Sin Bodega').filter(Boolean));
+    return Array.from(s).sort();
+  }, [enrichedData]);
+
+  const periodos = useMemo(() => {
+    const s = new Set<string>();
+    enrichedData.forEach(r => {
+      if (r.periodo_anio && r.periodo_mes) s.add(`${r.periodo_anio}-${r.periodo_mes}`);
+    });
+    // Also add created_at based periods
+    enrichedData.forEach(r => {
+      if (r.created_at) {
+        const d = new Date(r.created_at);
+        if (!isNaN(d.getTime())) s.add(`${d.getFullYear()}-${d.getMonth() + 1}`);
+      }
+    });
+    return Array.from(s).sort().reverse();
+  }, [enrichedData]);
+
+  const activeFilterCount = [empresaFilter, buFilter, provFilter, abcFilter, tipoCompraFilter, bodegaFilter, periodoFilter].filter(f => f !== 'all').length;
+
+  const clearAllFilters = () => {
+    setEmpresaFilter('all'); setBuFilter('all'); setProvFilter('all');
+    setAbcFilter('all'); setTipoCompraFilter('all'); setBodegaFilter('all');
+    setPeriodoFilter('all');
+  };
+
+  // ── Tipo Compra distribution (for KPI) ──────────────────────────────────
+  const tipoCompraDist = useMemo(() => {
+    const map: Record<string, { tipo: string; count: number; value: number }> = {};
+    data.forEach(r => {
+      const t = r.tipo_compra || 'Sin Definir';
+      if (!map[t]) map[t] = { tipo: t, count: 0, value: 0 };
+      map[t].count++;
+      map[t].value += Number(r.costo_total_inventario) || 0;
+    });
+    return Object.values(map).sort((a, b) => b.value - a.value);
+  }, [data]);
 
   // ── KPIs ──────────────────────────────────────────────────────────────────
   const totalInvValue = data.reduce((s, r) => s + (Number(r.costo_total_inventario) || 0), 0);
@@ -501,9 +635,23 @@ export function ComprasDashboard() {
   const avgMarkup = nacionalizadoAll.length > 0
     ? nacionalizadoAll.reduce((s, r) => s + r.markup, 0) / nacionalizadoAll.length : 0;
 
-  // ── Treasury link: PO pipeline value ──────────────────────────────────────
-  const poPipelineValue = topOrderItems.reduce((s, r) =>
-    s + (Number(r.cantidad_requerida) || 0) * (Number(r.costo_unitario) || 0), 0);
+  // ── Treasury link: PO pipeline value (ALL items with hacer_pedido='Si') ───
+  const allOrderItems = useMemo(() => data.filter(r => r.hacer_pedido === 'Si'), [data]);
+  const poPipelineValue = useMemo(() =>
+    allOrderItems.reduce((s, r) =>
+      s + (Number(r.cantidad_requerida) || 0) * (Number(r.costo_unitario) || 0), 0),
+    [allOrderItems]);
+  // Breakdown by ABC class
+  const poPipelineByABC = useMemo(() => {
+    const map: Record<string, { cls: string; items: number; value: number }> = {};
+    allOrderItems.forEach(r => {
+      const cls = r.abc_class || 'Sin clasificar';
+      if (!map[cls]) map[cls] = { cls, items: 0, value: 0 };
+      map[cls].items++;
+      map[cls].value += (Number(r.cantidad_requerida) || 0) * (Number(r.costo_unitario) || 0);
+    });
+    return Object.values(map).sort((a, b) => b.value - a.value);
+  }, [allOrderItems]);
 
   // ── Supplier concentration (Herfindahl) ───────────────────────────────────
   const supplierHHI = useMemo(() => {
@@ -527,6 +675,258 @@ export function ComprasDashboard() {
       { metric: 'Infaltables sin Stock', value: (data.filter(r => r.infaltable === 'Infaltable' && (Number(r.inventario_disponible) || 0) <= 0).length / Math.max(1, data.filter(r => r.infaltable === 'Infaltable').length)) * 100 },
     ];
   }, [data, supplierHHI, alertCount]);
+
+  // ── Predictive Analytics ─────────────────────────────────────────────────────
+
+  // P1: Inventory Burn Rate — projected months until stockout
+  const burnRate = useMemo(() => {
+    const byMonth = consumoTrend.filter(m => m.consumo > 0);
+    if (byMonth.length < 2) return [] as { mes: string; consumo: number; avgBurn: number; projectedStock: number }[];
+    const avgBurn = byMonth.reduce((s, m) => s + m.consumo, 0) / byMonth.length;
+    let stock = totalInvValue;
+    return byMonth.map(m => {
+      stock -= m.consumo * (Number(data[0]?.costo_unitario) || 1);
+      return { ...m, avgBurn, projectedStock: Math.max(0, stock) };
+    });
+  }, [consumoTrend, totalInvValue, data]);
+
+  // P2: Supplier Risk Heatmap — concentration + lead time
+  const supplierRisk = useMemo(() => {
+    return topProveedores.slice(0, 10).map(p => ({
+      ...p,
+      prov: p.prov.length > 18 ? p.prov.slice(0, 15) + '...' : p.prov,
+      riskScore: p.invValue * Math.max(1, p.avgLT / 30),
+      ltRisk: p.avgLT > 60 ? 'Alto' : p.avgLT > 30 ? 'Medio' : 'Bajo',
+    }));
+  }, [topProveedores]);
+
+  // P3: Coverage Risk Distribution — value at risk by coverage bucket
+  const coverageRisk = useMemo(() => {
+    return covBuckets.map(b => ({
+      ...b,
+      pctValue: totalInvValue > 0 ? (b.value / totalInvValue) * 100 : 0,
+      riskLevel: b.max <= 15 ? 'Crítico' : b.max <= 30 ? 'Alto' : b.max <= 60 ? 'Medio' : 'Bajo',
+    }));
+  }, [covBuckets, totalInvValue]);
+
+  // P4: ABC Pareto — cumulative value concentration
+  const abcPareto = useMemo(() => {
+    const sorted = [...data].sort((a, b) => (Number(b.costo_total_inventario) || 0) - (Number(a.costo_total_inventario) || 0));
+    let cumValue = 0;
+    const total = sorted.reduce((s, r) => s + (Number(r.costo_total_inventario) || 0), 0);
+    const buckets = [10, 20, 30, 50, 70, 100];
+    return buckets.map(pct => {
+      const idx = Math.ceil(sorted.length * pct / 100);
+      cumValue = sorted.slice(0, idx).reduce((s, r) => s + (Number(r.costo_total_inventario) || 0), 0);
+      return { pctItems: `${pct}%`, cumValuePct: total > 0 ? (cumValue / total) * 100 : 0, cumValue };
+    });
+  }, [data]);
+
+  // ── P5: EOQ (Economic Order Quantity) Analysis ──────────────────────────────
+  const eoqAnalysis = useMemo(() => {
+    // Wilson EOQ = sqrt(2 × D × S / H)  where D=annual demand, S=order cost, H=holding cost/unit/yr
+    const S = 50; // estimated fixed order cost per PO (USD)
+    const holdingRate = 0.25; // 25% annual holding cost rate
+    return data
+      .filter(r => (Number(r.consumo_promedio) || 0) > 0 && (Number(r.costo_unitario) || 0) > 0)
+      .map(r => {
+        const D = (Number(r.consumo_promedio) || 0) * 12; // annual demand
+        const C = Number(r.costo_unitario) || 1;
+        const H = C * holdingRate;
+        const eoq = Math.sqrt((2 * D * S) / H);
+        const currentOrder = Number(r.cantidad_requerida) || Number(r.compra_minima) || 0;
+        const ordersPerYear = D > 0 ? D / Math.max(eoq, 1) : 0;
+        const totalCostEOQ = (D > 0 ? (D / eoq) * S + (eoq / 2) * H : 0);
+        const totalCostCurrent = currentOrder > 0 ? (D / currentOrder) * S + (currentOrder / 2) * H : totalCostEOQ;
+        const savings = totalCostCurrent - totalCostEOQ;
+        return {
+          codigo: r.codigo,
+          descripcion: r.descripcion,
+          abc_class: r.abc_class,
+          demandAnual: Math.round(D),
+          costoUnit: C,
+          eoq: Math.round(eoq),
+          currentOrder: Math.round(currentOrder),
+          ordersPerYear: Math.round(ordersPerYear * 10) / 10,
+          savingsUSD: Math.round(savings),
+          totalCostEOQ: Math.round(totalCostEOQ),
+        };
+      })
+      .sort((a, b) => b.savingsUSD - a.savingsUSD)
+      .slice(0, 20);
+  }, [data]);
+
+  const totalEOQSavings = eoqAnalysis.reduce((s, r) => s + r.savingsUSD, 0);
+
+  // ── P6: Import vs Local Comparison ─────────────────────────────────────────
+  const importVsLocal = useMemo(() => {
+    const groups: Record<string, {
+      tipo: string; skus: number; invValue: number; avgLT: number; ltSum: number; ltCount: number;
+      avgCov: number; covSum: number; covCount: number; alertas: number; consumoValue: number;
+    }> = {};
+    data.forEach(r => {
+      const tipo = r.tipo_item === 'Importado' ? 'Importado' : r.tipo_item === 'Local' ? 'Local' : 'Sin Definir';
+      if (!groups[tipo]) groups[tipo] = { tipo, skus: 0, invValue: 0, avgLT: 0, ltSum: 0, ltCount: 0, avgCov: 0, covSum: 0, covCount: 0, alertas: 0, consumoValue: 0 };
+      const g = groups[tipo];
+      g.skus++;
+      g.invValue += Number(r.costo_total_inventario) || 0;
+      g.consumoValue += (Number(r.consumo_promedio) || 0) * (Number(r.costo_unitario) || 0);
+      const lt = Number(r.lead_time_dias) || 0;
+      if (lt > 0) { g.ltSum += lt; g.ltCount++; }
+      const cov = Number(r.dias_cobertura) || 0;
+      if (cov > 0 && cov < 10000) { g.covSum += cov; g.covCount++; }
+      if (r.alerta_desabasto === 'Alerta') g.alertas++;
+    });
+    return Object.values(groups).map(g => ({
+      ...g,
+      avgLT: g.ltCount > 0 ? Math.round(g.ltSum / g.ltCount) : 0,
+      avgCov: g.covCount > 0 ? Math.round(g.covSum / g.covCount) : 0,
+      alertPct: g.skus > 0 ? Math.round((g.alertas / g.skus) * 100) : 0,
+    })).sort((a, b) => b.invValue - a.invValue);
+  }, [data]);
+
+  // ── P7: Inventory Turnover by ABC Class ────────────────────────────────────
+  const turnoverByABC = useMemo(() => {
+    const map: Record<string, { cls: string; invValue: number; consumoValue: number; skus: number }> = {};
+    data.forEach(r => {
+      const cls = r.abc_class || 'Sin clasificar';
+      if (!map[cls]) map[cls] = { cls, invValue: 0, consumoValue: 0, skus: 0 };
+      map[cls].invValue += Number(r.costo_total_inventario) || 0;
+      map[cls].consumoValue += (Number(r.consumo_promedio) || 0) * (Number(r.costo_unitario) || 0);
+      map[cls].skus++;
+    });
+    return Object.values(map).map(g => ({
+      ...g,
+      turnover: g.invValue > 0 ? (g.consumoValue * 12) / g.invValue : 0,
+      daysOnHand: g.consumoValue > 0 ? (g.invValue / (g.consumoValue * 12)) * 365 : 0,
+    })).sort((a, b) => b.invValue - a.invValue);
+  }, [data]);
+
+  const overallTurnover = useMemo(() => {
+    const totalConsVal = data.reduce((s, r) => s + (Number(r.consumo_promedio) || 0) * (Number(r.costo_unitario) || 0), 0);
+    return totalInvValue > 0 ? (totalConsVal * 12) / totalInvValue : 0;
+  }, [data, totalInvValue]);
+
+  // ── P8: Demand Volatility — Coefficient of Variation ───────────────────────
+  const demandVolatility = useMemo(() => {
+    return data
+      .filter(r => (Number(r.consumo_promedio) || 0) > 0)
+      .map(r => {
+        const avg = Number(r.consumo_promedio) || 1;
+        const std = Number(r.desv_estandar) || 0;
+        const cv = std / avg; // coefficient of variation
+        return {
+          codigo: r.codigo,
+          descripcion: r.descripcion,
+          abc_class: r.abc_class,
+          consumoPromedio: Math.round(avg),
+          desvEstandar: Math.round(std),
+          cv: Math.round(cv * 100) / 100,
+          invValue: Number(r.costo_total_inventario) || 0,
+          riskCategory: cv > 1 ? 'Errático' : cv > 0.5 ? 'Variable' : cv > 0.2 ? 'Moderado' : 'Estable',
+        };
+      })
+      .sort((a, b) => b.cv - a.cv);
+  }, [data]);
+
+  const volatilityBuckets = useMemo(() => {
+    const buckets = [
+      { label: 'Estable (CV≤0.2)', min: 0, max: 0.2, count: 0, value: 0, color: '#1A4A28' },
+      { label: 'Moderado (0.2–0.5)', min: 0.2, max: 0.5, count: 0, value: 0, color: '#3B82F6' },
+      { label: 'Variable (0.5–1.0)', min: 0.5, max: 1.0, count: 0, value: 0, color: '#F59E0B' },
+      { label: 'Errático (CV>1.0)', min: 1.0, max: 999, count: 0, value: 0, color: '#EF4444' },
+    ];
+    demandVolatility.forEach(r => {
+      for (const b of buckets) {
+        if (r.cv >= b.min && r.cv < b.max) { b.count++; b.value += r.invValue; break; }
+      }
+    });
+    return buckets;
+  }, [demandVolatility]);
+
+  // ── P9: Working Capital Impact — Cash Conversion Cycle ─────────────────────
+  const workingCapitalImpact = useMemo(() => {
+    const avgMonthlyConsumptionCost = data.reduce((s, r) =>
+      s + (Number(r.consumo_promedio) || 0) * (Number(r.costo_unitario) || 0), 0);
+    const dailyConsumptionCost = (avgMonthlyConsumptionCost * 12) / 365;
+    const daysInventoryOutstanding = dailyConsumptionCost > 0 ? totalInvValue / dailyConsumptionCost : 0;
+    // Simulate scenarios: reduce inventory by 10%, 20%, 30%
+    const scenarios = [0, 10, 20, 30].map(pct => {
+      const reducedInv = totalInvValue * (1 - pct / 100);
+      const freedCash = totalInvValue - reducedInv;
+      const newDIO = dailyConsumptionCost > 0 ? reducedInv / dailyConsumptionCost : 0;
+      return {
+        scenario: pct === 0 ? 'Actual' : `-${pct}% Inv.`,
+        invValue: Math.round(reducedInv),
+        freedCash: Math.round(freedCash),
+        dio: Math.round(newDIO),
+        annualSavings: Math.round(freedCash * 0.08), // opportunity cost at 8% annual
+      };
+    });
+    return { daysInventoryOutstanding: Math.round(daysInventoryOutstanding), dailyConsumptionCost: Math.round(dailyConsumptionCost), scenarios };
+  }, [data, totalInvValue]);
+
+  // ── P10: Supplier Dependency Matrix — single-source risk ───────────────────
+  const supplierDependency = useMemo(() => {
+    // Group SKUs by supplier, identify single-source items
+    const provMap: Record<string, { prov: string; skus: number; invValue: number; singleSource: number; singleSourceValue: number; origins: Set<string>; avgLT: number; ltSum: number; ltCount: number }> = {};
+    // First pass: count how many suppliers each SKU has
+    const skuProviders: Record<string, string[]> = {};
+    data.forEach(r => {
+      const sku = r.codigo;
+      const prov = r.proveedor || 'Sin proveedor';
+      if (!skuProviders[sku]) skuProviders[sku] = [];
+      if (!skuProviders[sku].includes(prov)) skuProviders[sku].push(prov);
+    });
+    data.forEach(r => {
+      const prov = r.proveedor || 'Sin proveedor';
+      if (!provMap[prov]) provMap[prov] = { prov, skus: 0, invValue: 0, singleSource: 0, singleSourceValue: 0, origins: new Set(), avgLT: 0, ltSum: 0, ltCount: 0 };
+      const g = provMap[prov];
+      g.skus++;
+      g.invValue += Number(r.costo_total_inventario) || 0;
+      g.origins.add(r.origen || 'Sin definir');
+      const lt = Number(r.lead_time_dias) || 0;
+      if (lt > 0) { g.ltSum += lt; g.ltCount++; }
+      if ((skuProviders[r.codigo] || []).length === 1) {
+        g.singleSource++;
+        g.singleSourceValue += Number(r.costo_total_inventario) || 0;
+      }
+    });
+    return Object.values(provMap)
+      .map(g => ({
+        ...g,
+        origins: Array.from(g.origins).join(', '),
+        avgLT: g.ltCount > 0 ? Math.round(g.ltSum / g.ltCount) : 0,
+        singleSourcePct: g.skus > 0 ? Math.round((g.singleSource / g.skus) * 100) : 0,
+        riskScore: (g.singleSourceValue * Math.max(1, (g.ltCount > 0 ? g.ltSum / g.ltCount : 30) / 30)),
+      }))
+      .sort((a, b) => b.riskScore - a.riskScore)
+      .slice(0, 12);
+  }, [data]);
+
+  // ── FilterableTable column defs ─────────────────────────────────────────────
+  const orderColumns: ColumnDef<MRPItem>[] = useMemo(() => [
+    { key: 'codigo', header: 'Código', render: (r) => <span className="font-mono text-xs">{r.codigo}</span>, filterType: 'text' },
+    { key: 'descripcion', header: 'Descripción', render: (r) => <span className="max-w-[200px] truncate block" title={r.descripcion}>{r.descripcion}</span>, filterType: 'text' },
+    { key: 'abc_class', header: 'ABC', render: (r) => <Badge variant={r.abc_class === 'A' ? 'success' : r.abc_class === 'B' ? 'warning' : 'default'}>{r.abc_class || '—'}</Badge>, filterType: 'select' },
+    { key: 'proveedor', header: 'Proveedor', render: (r) => <span className="text-xs">{r.proveedor || '—'}</span>, filterType: 'select' },
+    { key: 'cantidad_requerida', header: 'Cant. Req.', align: 'right', render: (r) => <span className="font-medium">{fmt(Number(r.cantidad_requerida) || 0)}</span>, accessor: (r) => Number(r.cantidad_requerida) || 0 },
+    { key: 'costo_unitario', header: 'Costo Unit.', align: 'right', render: (r) => <span>{fmtUSD(Number(r.costo_unitario) || 0)}</span>, accessor: (r) => Number(r.costo_unitario) || 0 },
+    { key: 'costo_total', header: 'Costo Total', align: 'right', render: (r) => <span className="font-bold">{fmtUSD((Number(r.cantidad_requerida) || 0) * (Number(r.costo_unitario) || 0))}</span>, accessor: (r) => (Number(r.cantidad_requerida) || 0) * (Number(r.costo_unitario) || 0) },
+    { key: 'lead_time_dias', header: 'Lead Time', align: 'right', render: (r) => <span>{Number(r.lead_time_dias) || 0}d</span>, accessor: (r) => Number(r.lead_time_dias) || 0 },
+    { key: 'alerta_desabasto', header: 'Estado', render: (r) => r.alerta_desabasto === 'Alerta' ? <Badge variant="error">Alerta</Badge> : <Badge variant="warning">Pedir</Badge>, filterType: 'select' },
+  ], []);
+
+  const alertColumns: ColumnDef<MRPItem>[] = useMemo(() => [
+    { key: 'codigo', header: 'Código', render: (r) => <span className="font-mono text-xs">{r.codigo}</span>, filterType: 'text' },
+    { key: 'descripcion', header: 'Descripción', render: (r) => <span className="max-w-[200px] truncate block" title={r.descripcion}>{r.descripcion}</span>, filterType: 'text' },
+    { key: 'proveedor', header: 'Proveedor', render: (r) => <span className="text-xs">{r.proveedor || '—'}</span>, filterType: 'select' },
+    { key: 'inventario_disponible', header: 'Inventario', align: 'right', render: (r) => <span className="font-medium">{fmt(Number(r.inventario_disponible) || 0)}</span>, accessor: (r) => Number(r.inventario_disponible) || 0 },
+    { key: 'minimo_inventario', header: 'Mínimo', align: 'right', render: (r) => <span>{fmt(Number(r.minimo_inventario) || 0)}</span>, accessor: (r) => Number(r.minimo_inventario) || 0 },
+    { key: 'consumo_promedio', header: 'Consumo/mes', align: 'right', render: (r) => <span>{fmt(Number(r.consumo_promedio) || 0)}</span>, accessor: (r) => Number(r.consumo_promedio) || 0 },
+    { key: 'dias_cobertura', header: 'Cobertura', align: 'right', render: (r) => <Badge variant={Number(r.dias_cobertura) < 15 ? 'error' : 'warning'}>{Math.round(Number(r.dias_cobertura) || 0)}d</Badge>, accessor: (r) => Number(r.dias_cobertura) || 0 },
+    { key: 'costo_total_inventario', header: 'Valor Inv.', align: 'right', render: (r) => <span className="font-bold">{fmtUSD(Number(r.costo_total_inventario) || 0)}</span>, accessor: (r) => Number(r.costo_total_inventario) || 0 },
+  ], []);
 
   // ── Narrative ─────────────────────────────────────────────────────────────
   const insights = useMemo(() => {
@@ -610,38 +1010,336 @@ export function ComprasDashboard() {
               Compras &amp; MRP
             </h1>
             <p className="text-gray-500 mt-1">
-              {fmt(totalSKUs)} SKUs · {fmt(activeSKUs)} activos · {proveedores.length} proveedores · Última carga: {lastRefresh.toLocaleTimeString('es-CR')}
+              {fmt(totalSKUs)} SKUs · {fmt(activeSKUs)} activos · {proveedores.length} proveedores
+              {tipoCompraDist.map(t => ` · ${t.tipo}: ${fmt(t.count)}`).join('')}
+              {' · '}Última carga: {lastRefresh.toLocaleTimeString('es-CR')}
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            {/* ABC filter */}
-            <select
-              value={abcFilter}
-              onChange={e => setAbcFilter(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm border transition-colors ${
+                activeFilterCount > 0 ? 'bg-[#1A4A28] text-white border-[#1A4A28]' : 'border-gray-300 hover:bg-gray-50'
+              }`}
             >
-              <option value="all">Todas las clases ABC</option>
-              <option value="A">Clase A</option>
-              <option value="B">Clase B</option>
-              <option value="C">Clase C</option>
-            </select>
-            {/* Provider filter */}
-            <select
-              value={provFilter}
-              onChange={e => setProvFilter(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm max-w-[200px]"
+              <Filter className="w-4 h-4" />
+              Filtros {activeFilterCount > 0 && <Badge variant="warning">{activeFilterCount}</Badge>}
+            </button>
+            <button
+              onClick={() => setShowCuration(!showCuration)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm border transition-colors ${
+                showCuration ? 'bg-[#C9A84C] text-white border-[#C9A84C]' : 'border-gray-300 hover:bg-gray-50'
+              }`}
             >
-              <option value="all">Todos los proveedores</option>
-              {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
-            <button onClick={fetchData} className="p-2 rounded-lg border border-gray-300 hover:bg-gray-50">
+              <Pencil className="w-4 h-4" />
+              Curación
+            </button>
+            <button onClick={fetchData} className="p-2 rounded-lg border border-gray-300 hover:bg-gray-50" title="Refrescar datos">
               <RefreshCw className="w-4 h-4" />
             </button>
           </div>
         </div>
 
+        {/* ── Comprehensive Filter Bar ─────────────────────────────────── */}
+        {showFilters && (
+          <Card className="border-[#1A4A28]/30 bg-green-50/30">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm font-semibold text-[#1A4A28] flex items-center gap-2">
+                  <Filter className="w-4 h-4" />
+                  Filtros de Segmentación
+                </p>
+                {activeFilterCount > 0 && (
+                  <button onClick={clearAllFilters} className="text-xs text-red-600 hover:underline flex items-center gap-1">
+                    <X className="w-3 h-3" /> Limpiar todos ({activeFilterCount})
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3">
+                {/* Empresa */}
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wide font-medium mb-1 block">
+                    <Building2 className="w-3 h-3 inline mr-1" />Empresa
+                  </label>
+                  <select value={empresaFilter} onChange={e => setEmpresaFilter(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+                    <option value="all">Todas ({fmt(empresas.length)})</option>
+                    {empresas.map(e => <option key={e} value={e}>{e}</option>)}
+                  </select>
+                </div>
+                {/* Unidad de Negocio */}
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wide font-medium mb-1 block">
+                    <Layers className="w-3 h-3 inline mr-1" />Unidad de Negocio
+                  </label>
+                  <select value={buFilter} onChange={e => setBuFilter(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+                    <option value="all">Todas ({fmt(unidadesNegocio.length)})</option>
+                    {unidadesNegocio.map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                </div>
+                {/* Periodo */}
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wide font-medium mb-1 block">
+                    <Calendar className="w-3 h-3 inline mr-1" />Periodo (Mes/Año)
+                  </label>
+                  <select value={periodoFilter} onChange={e => setPeriodoFilter(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+                    <option value="all">Todos los periodos</option>
+                    {periodos.map(p => {
+                      const [y, m] = p.split('-');
+                      const monthName = new Date(Number(y), Number(m) - 1).toLocaleDateString('es-CR', { month: 'short' });
+                      return <option key={p} value={p}>{monthName} {y}</option>;
+                    })}
+                  </select>
+                </div>
+                {/* Tipo Compra */}
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wide font-medium mb-1 block">
+                    <Globe className="w-3 h-3 inline mr-1" />Tipo Compra
+                  </label>
+                  <select value={tipoCompraFilter} onChange={e => setTipoCompraFilter(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+                    <option value="all">Local + Internacional</option>
+                    <option value="Local">Local</option>
+                    <option value="Internacional">Internacional</option>
+                    <option value="Sin Definir">Sin Definir</option>
+                  </select>
+                </div>
+                {/* ABC */}
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wide font-medium mb-1 block">
+                    <BarChart3 className="w-3 h-3 inline mr-1" />Clase ABC
+                  </label>
+                  <select value={abcFilter} onChange={e => setAbcFilter(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+                    <option value="all">Todas</option>
+                    <option value="A">A (Alto valor)</option>
+                    <option value="B">B (Medio)</option>
+                    <option value="C">C (Bajo)</option>
+                  </select>
+                </div>
+                {/* Proveedor */}
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wide font-medium mb-1 block">
+                    <Truck className="w-3 h-3 inline mr-1" />Proveedor
+                  </label>
+                  <select value={provFilter} onChange={e => setProvFilter(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+                    <option value="all">Todos ({fmt(proveedores.length)})</option>
+                    {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+                {/* Bodega */}
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wide font-medium mb-1 block">
+                    <Warehouse className="w-3 h-3 inline mr-1" />Bodega
+                  </label>
+                  <select value={bodegaFilter} onChange={e => setBodegaFilter(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+                    <option value="all">Todas ({fmt(bodegas.length)})</option>
+                    {bodegas.map(b => <option key={b} value={b}>{b}</option>)}
+                  </select>
+                </div>
+              </div>
+              {/* Excluded bodegas toggle */}
+              <div className="mt-3 flex items-center gap-4 text-xs text-gray-500">
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="checkbox" checked={showExcludedBodegas} onChange={e => setShowExcludedBodegas(e.target.checked)}
+                    className="rounded border-gray-300" />
+                  Mostrar bodegas excluidas
+                </label>
+                <span className="text-gray-400">|</span>
+                <span>Mostrando <strong className="text-gray-700">{fmt(data.length)}</strong> de {fmt(enrichedData.length)} SKUs</span>
+                {activeFilterCount > 0 && (
+                  <span className="text-[#1A4A28] font-medium">({activeFilterCount} filtro{activeFilterCount > 1 ? 's' : ''} activo{activeFilterCount > 1 ? 's' : ''})</span>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ── Curation Module ────────────────────────────────────────────── */}
+        {showCuration && (
+          <Card className="border-[#C9A84C] border-2">
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                <span className="flex items-center gap-2 text-base">
+                  <Edit3 className="w-5 h-5 text-[#C9A84C]" />
+                  Módulo de Curación de Datos
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={async () => {
+                      const result = await pcgrafBackup({ backup_type: 'pre_curation', user: 'dashboard' });
+                      if (result.error) alert(`Error: ${result.error}`);
+                      else alert(`Backup creado: ${result.row_count} filas, checksum: ${result.checksum?.slice(0, 12)}...`);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  >
+                    <History className="w-3.5 h-3.5" />
+                    Crear Respaldo
+                  </button>
+                  <button
+                    onClick={async () => {
+                      const result = await pcgrafBackupList();
+                      const list = result.backups || [];
+                      alert(`${list.length} respaldos:\n${list.slice(0, 5).map(b =>
+                        `• ${new Date(b.created_at).toLocaleString('es-CR')} — ${b.backup_type} — ${b.row_count} filas — ${b.checksum.slice(0, 8)}...`
+                      ).join('\n')}`);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-300 rounded-lg hover:bg-gray-50"
+                  >
+                    <Database className="w-3.5 h-3.5" />
+                    Ver Respaldos
+                  </button>
+                </div>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 text-sm">
+                <p className="font-medium text-amber-800 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4" />
+                  Antes de editar, cree un respaldo inmutable. Los cambios se guardan en Supabase y opcionalmente se sincronizan a PcGraf.
+                </p>
+              </div>
+              <div className="overflow-x-auto max-h-[500px] overflow-y-auto border rounded-lg">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-gray-50 z-10">
+                    <tr className="border-b-2 border-gray-300">
+                      <th className="py-2 px-2 text-left font-semibold">Acciones</th>
+                      <th className="py-2 px-2 text-left font-semibold">Código</th>
+                      <th className="py-2 px-2 text-left font-semibold">Descripción</th>
+                      <th className="py-2 px-2 text-left font-semibold">Empresa</th>
+                      <th className="py-2 px-2 text-left font-semibold">Unidad Neg.</th>
+                      <th className="py-2 px-2 text-left font-semibold">Bodega</th>
+                      <th className="py-2 px-2 text-left font-semibold">Tipo Compra</th>
+                      <th className="py-2 px-2 text-left font-semibold">Proveedor</th>
+                      <th className="py-2 px-2 text-left font-semibold">Origen</th>
+                      <th className="py-2 px-2 text-right font-semibold">Costo Unit.</th>
+                      <th className="py-2 px-2 text-center font-semibold">Excluir Bodega</th>
+                      <th className="py-2 px-2 text-left font-semibold">Notas</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {data.slice(0, 50).map((row) => {
+                      const isEditing = editingRow === row.codigo;
+                      return (
+                        <tr key={row.codigo} className={isEditing ? 'bg-yellow-50' : 'hover:bg-gray-50'}>
+                          <td className="py-1.5 px-2">
+                            {isEditing ? (
+                              <div className="flex gap-1">
+                                <button
+                                  onClick={async () => {
+                                    setCurationSaving(true);
+                                    try {
+                                      const { error } = await supabase
+                                        .schema('silver_finance' as 'public')
+                                        .from('mrp_master')
+                                        .update({
+                                          empresa: editValues.empresa || null,
+                                          unidad_negocio: editValues.unidad_negocio || null,
+                                          bodega: editValues.bodega || null,
+                                          tipo_compra: editValues.tipo_compra || null,
+                                          proveedor: editValues.proveedor || row.proveedor,
+                                          origen: editValues.origen || row.origen,
+                                          costo_unitario: editValues.costo_unitario ? Number(editValues.costo_unitario) : row.costo_unitario,
+                                          bodega_excluida: editValues.bodega_excluida === 'true',
+                                          notas_curacion: editValues.notas_curacion || null,
+                                          curado_por: 'dashboard',
+                                          curado_at: new Date().toISOString(),
+                                        })
+                                        .eq('codigo', row.codigo);
+                                      if (error) alert(`Error: ${error.message}`);
+                                      else { setEditingRow(null); fetchData(); }
+                                    } finally { setCurationSaving(false); }
+                                  }}
+                                  disabled={curationSaving}
+                                  className="p-1 text-green-600 hover:bg-green-100 rounded"
+                                  title="Guardar"
+                                >
+                                  {curationSaving ? <LoadingSpinner size="sm" /> : <Save className="w-3.5 h-3.5" />}
+                                </button>
+                                <button onClick={() => setEditingRow(null)} className="p-1 text-red-600 hover:bg-red-100 rounded" title="Cancelar">
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setEditingRow(row.codigo);
+                                  setEditValues({
+                                    empresa: row.empresa || '',
+                                    unidad_negocio: row.unidad_negocio || '',
+                                    bodega: row.bodega || '',
+                                    tipo_compra: row.tipo_compra || '',
+                                    proveedor: row.proveedor || '',
+                                    origen: row.origen || '',
+                                    costo_unitario: String(row.costo_unitario || ''),
+                                    bodega_excluida: String(row.bodega_excluida || false),
+                                    notas_curacion: row.notas_curacion || '',
+                                  });
+                                }}
+                                className="p-1 text-gray-500 hover:bg-gray-100 rounded"
+                                title="Editar"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </td>
+                          <td className="py-1.5 px-2 font-mono">{row.codigo}</td>
+                          <td className="py-1.5 px-2 max-w-[150px] truncate" title={row.descripcion}>{row.descripcion}</td>
+                          {isEditing ? (
+                            <>
+                              <td className="py-1 px-1"><input value={editValues.empresa || ''} onChange={e => setEditValues(v => ({ ...v, empresa: e.target.value }))} className="w-full border rounded px-1 py-0.5 text-xs" /></td>
+                              <td className="py-1 px-1"><input value={editValues.unidad_negocio || ''} onChange={e => setEditValues(v => ({ ...v, unidad_negocio: e.target.value }))} className="w-full border rounded px-1 py-0.5 text-xs" /></td>
+                              <td className="py-1 px-1"><input value={editValues.bodega || ''} onChange={e => setEditValues(v => ({ ...v, bodega: e.target.value }))} className="w-full border rounded px-1 py-0.5 text-xs" /></td>
+                              <td className="py-1 px-1">
+                                <select value={editValues.tipo_compra || ''} onChange={e => setEditValues(v => ({ ...v, tipo_compra: e.target.value }))} className="w-full border rounded px-1 py-0.5 text-xs">
+                                  <option value="">Auto-detectar</option>
+                                  <option value="Local">Local</option>
+                                  <option value="Internacional">Internacional</option>
+                                  <option value="Sin Definir">Sin Definir</option>
+                                </select>
+                              </td>
+                              <td className="py-1 px-1"><input value={editValues.proveedor || ''} onChange={e => setEditValues(v => ({ ...v, proveedor: e.target.value }))} className="w-full border rounded px-1 py-0.5 text-xs" /></td>
+                              <td className="py-1 px-1"><input value={editValues.origen || ''} onChange={e => setEditValues(v => ({ ...v, origen: e.target.value }))} className="w-full border rounded px-1 py-0.5 text-xs" /></td>
+                              <td className="py-1 px-1"><input value={editValues.costo_unitario || ''} onChange={e => setEditValues(v => ({ ...v, costo_unitario: e.target.value }))} className="w-full border rounded px-1 py-0.5 text-xs text-right" type="number" step="0.01" /></td>
+                              <td className="py-1 px-1 text-center"><input type="checkbox" checked={editValues.bodega_excluida === 'true'} onChange={e => setEditValues(v => ({ ...v, bodega_excluida: String(e.target.checked) }))} /></td>
+                              <td className="py-1 px-1"><input value={editValues.notas_curacion || ''} onChange={e => setEditValues(v => ({ ...v, notas_curacion: e.target.value }))} className="w-full border rounded px-1 py-0.5 text-xs" placeholder="Notas..." /></td>
+                            </>
+                          ) : (
+                            <>
+                              <td className="py-1.5 px-2 text-gray-500">{row.empresa || '—'}</td>
+                              <td className="py-1.5 px-2 text-gray-500">{row.unidad_negocio || '—'}</td>
+                              <td className="py-1.5 px-2 text-gray-500">{row.bodega || '—'}</td>
+                              <td className="py-1.5 px-2">
+                                <Badge variant={row.tipo_compra === 'Internacional' ? 'warning' : row.tipo_compra === 'Local' ? 'success' : 'default'}>
+                                  {row.tipo_compra || '—'}
+                                </Badge>
+                              </td>
+                              <td className="py-1.5 px-2">{row.proveedor || '—'}</td>
+                              <td className="py-1.5 px-2">{row.origen || '—'}</td>
+                              <td className="py-1.5 px-2 text-right">{fmtUSD2(Number(row.costo_unitario) || 0)}</td>
+                              <td className="py-1.5 px-2 text-center">{row.bodega_excluida ? '✕' : ''}</td>
+                              <td className="py-1.5 px-2 text-gray-400 max-w-[100px] truncate">{row.notas_curacion || ''}</td>
+                            </>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[10px] text-gray-400 mt-2 italic">
+                Mostrando primeros 50 registros del dataset filtrado. Los cambios se guardan en Supabase (silver_finance.mrp_master) y se registran en silver_finance.curation_log.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
         {/* ── KPIs ────────────────────────────────────────────────────────── */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
           <KPICard title="Valor Inventario" value={fmtUSD(totalInvValue)} icon={DollarSign} format="text" />
           <KPICard title="SKUs en Alerta" value={alertCount} icon={AlertTriangle} format="number"
             semaphore={alertCount === 0 ? 'green' : alertCount < 20 ? 'yellow' : 'red'} />
@@ -658,7 +1356,7 @@ export function ComprasDashboard() {
           <CardContent className="p-4">
             <div className="flex items-start gap-3">
               <TrendingDown className="w-5 h-5 text-[#1A4A28] mt-0.5 flex-shrink-0" />
-              <div>
+              <div className="w-full">
                 <p className="font-semibold text-[#1A4A28]">Impacto en Tesorería</p>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-2 text-sm">
                   <div>
@@ -673,6 +1371,76 @@ export function ComprasDashboard() {
                     <span className="text-gray-600">CxP actuales:</span>
                     <span className="font-bold text-gray-900 ml-1">{formatCurrency(cxpTotal)}</span>
                   </div>
+                </div>
+
+                {/* ── Formula breakdown for OC pendientes → futuras CxP ─────── */}
+                <div className="mt-4 pt-3 border-t border-[#1A4A28]/20">
+                  <p className="text-xs font-bold text-[#1A4A28] mb-2 flex items-center gap-1.5">
+                    <ShoppingCart className="w-3.5 h-3.5" />
+                    Fórmula: OC Pendientes → Futuras CxP
+                  </p>
+                  <div className="bg-white rounded-lg border border-gray-200 p-3">
+                    {/* Formula */}
+                    <div className="font-mono text-xs text-gray-700 space-y-1 mb-3">
+                      <p>
+                        <span className="text-[#1A4A28] font-bold">Pipeline CxP</span>
+                        {' = Σ '}
+                        <span className="text-blue-600 font-semibold">cantidad_requerida</span>
+                        {' × '}
+                        <span className="text-amber-600 font-semibold">costo_unitario</span>
+                        <span className="text-gray-400"> (para cada ítem donde </span>
+                        <span className="text-purple-600 font-semibold">hacer_pedido = "Sí"</span>
+                        <span className="text-gray-400">)</span>
+                      </p>
+                    </div>
+                    {/* Summary stats */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+                      <div className="bg-gray-50 rounded p-2 text-center">
+                        <p className="text-[10px] text-gray-500 uppercase tracking-wide">Ítems con OC</p>
+                        <p className="text-sm font-bold text-gray-900">{fmt(allOrderItems.length)}</p>
+                        <p className="text-[10px] text-gray-400">de {fmt(totalSKUs)} SKUs totales</p>
+                      </div>
+                      <div className="bg-gray-50 rounded p-2 text-center">
+                        <p className="text-[10px] text-gray-500 uppercase tracking-wide">Pipeline Total</p>
+                        <p className="text-sm font-bold text-[#1A4A28]">{fmtUSD(poPipelineValue)}</p>
+                        <p className="text-[10px] text-gray-400">Σ (cant × costo)</p>
+                      </div>
+                      <div className="bg-gray-50 rounded p-2 text-center">
+                        <p className="text-[10px] text-gray-500 uppercase tracking-wide">Ticket Promedio</p>
+                        <p className="text-sm font-bold text-gray-900">{allOrderItems.length > 0 ? fmtUSD(poPipelineValue / allOrderItems.length) : '$0'}</p>
+                        <p className="text-[10px] text-gray-400">por línea de OC</p>
+                      </div>
+                      <div className="bg-gray-50 rounded p-2 text-center">
+                        <p className="text-[10px] text-gray-500 uppercase tracking-wide">% vs Inventario</p>
+                        <p className="text-sm font-bold text-gray-900">{totalInvValue > 0 ? fmtPct((poPipelineValue / totalInvValue) * 100) : '0%'}</p>
+                        <p className="text-[10px] text-gray-400">pipeline / inv. actual</p>
+                      </div>
+                    </div>
+                    {/* ABC breakdown */}
+                    {poPipelineByABC.length > 0 && (
+                      <div>
+                        <p className="text-[10px] text-gray-500 uppercase tracking-wide mb-1.5">Desglose por Clasificación ABC</p>
+                        <div className="space-y-1">
+                          {poPipelineByABC.map((row, i) => (
+                            <div key={i} className="flex items-center justify-between text-xs">
+                              <span className="flex items-center gap-1.5">
+                                <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: ABC_COLORS[row.cls] || CHART_COLORS[i % CHART_COLORS.length] }} />
+                                <span className="font-medium">Clase {row.cls}</span>
+                                <span className="text-gray-400">({fmt(row.items)} ítems)</span>
+                              </span>
+                              <span className="flex items-center gap-3">
+                                <span className="font-bold">{fmtUSD(row.value)}</span>
+                                <span className="text-gray-400 w-12 text-right">{poPipelineValue > 0 ? fmtPct((row.value / poPipelineValue) * 100) : '0%'}</span>
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-gray-400 mt-1.5 italic">
+                    Fuente: tabla <span className="font-mono">silver_finance.mrp_master</span> · campo <span className="font-mono">hacer_pedido = "Sí"</span> · valores FOB sin impuestos de importación
+                  </p>
                 </div>
               </div>
             </div>
@@ -693,7 +1461,7 @@ export function ComprasDashboard() {
               <ResponsiveContainer width="100%" height={300}>
                 <ComposedChart data={consumoTrend}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="mes" tick={{ fontSize: 11 }} />
+                  <XAxis dataKey="mes" tick={{ fontSize: 11 }} interval={0} angle={-25} textAnchor="end" height={45} />
                   <YAxis tickFormatter={v => fmt(v)} tick={{ fontSize: 11 }} />
                   <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [fmt(v), 'Consumo (uds)']} />
                   <Area type="monotone" dataKey="consumo" fill="#1A4A2820" stroke="#1A4A28" strokeWidth={2} />
@@ -716,7 +1484,8 @@ export function ComprasDashboard() {
                 <ResponsiveContainer width="50%" height={260}>
                   <PieChart>
                     <Pie data={abcDist} dataKey="invValue" nameKey="cls" cx="50%" cy="50%"
-                         outerRadius={100} label={({ cls, percent }) => `${cls}: ${(percent * 100).toFixed(0)}%`}>
+                         outerRadius={100} label={({ cls, percent }) => `${cls}: ${(percent * 100).toFixed(0)}%`}
+                         labelLine={{ strokeWidth: 1 }}>
                       {abcDist.map((entry, i) => (
                         <Cell key={i} fill={ABC_COLORS[entry.cls] || CHART_COLORS[i % CHART_COLORS.length]} />
                       ))}
@@ -755,10 +1524,10 @@ export function ComprasDashboard() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={400}>
-                <BarChart data={topProveedores} layout="vertical" margin={{ left: 10 }}>
+                <BarChart data={topProveedores} layout="vertical" margin={{ left: 20, right: 10 }}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis type="number" tickFormatter={v => fmtUSD(v)} tick={{ fontSize: 10 }} />
-                  <YAxis type="category" dataKey="prov" width={130} tick={{ fontSize: 10 }} />
+                  <YAxis type="category" dataKey="prov" width={160} tick={{ fontSize: 10 }} />
                   <Tooltip contentStyle={tooltipStyle}
                     formatter={(v: number) => fmtUSD(v)}
                     labelFormatter={(l) => {
@@ -789,7 +1558,8 @@ export function ComprasDashboard() {
                 <PieChart>
                   <Pie data={byOrigin} dataKey="value" nameKey="origen" cx="50%" cy="50%"
                        outerRadius={90} innerRadius={40}
-                       label={({ origen, percent }) => `${origen}: ${(percent * 100).toFixed(0)}%`}>
+                       label={({ origen, percent }) => percent > 0.03 ? `${origen}: ${(percent * 100).toFixed(0)}%` : ''}
+                       labelLine={{ strokeWidth: 1 }}>
                     {byOrigin.map((entry, i) => (
                       <Cell key={i} fill={ORIGIN_COLORS[entry.origen] || CHART_COLORS[i % CHART_COLORS.length]} />
                     ))}
@@ -826,7 +1596,7 @@ export function ComprasDashboard() {
               <ResponsiveContainer width="100%" height={260}>
                 <BarChart data={covBuckets}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="label" tick={{ fontSize: 9 }} />
+                  <XAxis dataKey="label" tick={{ fontSize: 10 }} interval={0} angle={-20} textAnchor="end" height={45} />
                   <YAxis tick={{ fontSize: 11 }} />
                   <Tooltip contentStyle={tooltipStyle}
                     formatter={(v: number, name: string) => [fmt(v), name === 'count' ? 'SKUs' : 'Valor']} />
@@ -858,7 +1628,7 @@ export function ComprasDashboard() {
               <ResponsiveContainer width="100%" height={260}>
                 <BarChart data={ltByOrigin}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="origen" tick={{ fontSize: 10 }} />
+                  <XAxis dataKey="origen" tick={{ fontSize: 11 }} interval={0} />
                   <YAxis tick={{ fontSize: 11 }} />
                   <Tooltip contentStyle={tooltipStyle}
                     formatter={(v: number, name: string) => [`${v} días`, name === 'avgLT' ? 'Promedio' : 'Máximo']} />
@@ -879,9 +1649,9 @@ export function ComprasDashboard() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={280}>
-                <RadarChart data={radarData} cx="50%" cy="50%" outerRadius="70%">
+                <RadarChart data={radarData} cx="50%" cy="50%" outerRadius="65%">
                   <PolarGrid />
-                  <PolarAngleAxis dataKey="metric" tick={{ fontSize: 9 }} />
+                  <PolarAngleAxis dataKey="metric" tick={{ fontSize: 10, fill: '#374151' }} />
                   <PolarRadiusAxis tick={{ fontSize: 9 }} />
                   <Radar name="Riesgo %" dataKey="value" stroke="#EF4444" fill="#EF444440" strokeWidth={2} />
                 </RadarChart>
@@ -905,7 +1675,8 @@ export function ComprasDashboard() {
                 <PieChart>
                   <Pie data={stockPolicy} dataKey="value" nameKey="tipo" cx="50%" cy="50%"
                        outerRadius={85} innerRadius={35}
-                       label={({ tipo, percent }) => `${tipo}: ${(percent * 100).toFixed(0)}%`}>
+                       label={({ tipo, percent }) => percent > 0.03 ? `${tipo}: ${(percent * 100).toFixed(0)}%` : ''}
+                       labelLine={{ strokeWidth: 1 }}>
                     {stockPolicy.map((_, i) => (
                       <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
                     ))}
@@ -940,7 +1711,8 @@ export function ComprasDashboard() {
                 <PieChart>
                   <Pie data={paramDist} dataKey="value" nameKey="label" cx="50%" cy="50%"
                        outerRadius={85} innerRadius={35}
-                       label={({ label, percent }) => `${label.slice(0, 15)}: ${(percent * 100).toFixed(0)}%`}>
+                       label={({ label, percent }) => percent > 0.03 ? `${label}: ${(percent * 100).toFixed(0)}%` : ''}
+                       labelLine={{ strokeWidth: 1 }}>
                     {paramDist.map((_, i) => (
                       <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
                     ))}
@@ -974,8 +1746,8 @@ export function ComprasDashboard() {
               <ResponsiveContainer width="100%" height={270}>
                 <ComposedChart data={projection12m}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="mes" tick={{ fontSize: 9 }} />
-                  <YAxis tickFormatter={v => fmtUSD(v)} tick={{ fontSize: 9 }} />
+                  <XAxis dataKey="mes" tick={{ fontSize: 10 }} interval={0} angle={-25} textAnchor="end" height={45} />
+                  <YAxis tickFormatter={v => fmtUSD(v)} tick={{ fontSize: 10 }} width={70} />
                   <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => fmtUSD(v)} />
                   <Legend wrapperStyle={{ fontSize: '11px' }} />
                   <Bar dataKey="comprasProyectadas" name="Compras Proy." fill="#C9A84C" radius={[3, 3, 0, 0]} />
@@ -987,7 +1759,7 @@ export function ComprasDashboard() {
           </Card>
         </div>
 
-        {/* ── Items requiring orders ──────────────────────────────────────── */}
+        {/* ── Items requiring orders with column filters ──────────────────── */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -996,51 +1768,13 @@ export function ComprasDashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200 text-left">
-                    <th className="pb-2 font-medium text-gray-600">Código</th>
-                    <th className="pb-2 font-medium text-gray-600">Descripción</th>
-                    <th className="pb-2 font-medium text-gray-600">ABC</th>
-                    <th className="pb-2 font-medium text-gray-600">Proveedor</th>
-                    <th className="pb-2 font-medium text-gray-600 text-right">Cant. Req.</th>
-                    <th className="pb-2 font-medium text-gray-600 text-right">Costo Unit.</th>
-                    <th className="pb-2 font-medium text-gray-600 text-right">Costo Total</th>
-                    <th className="pb-2 font-medium text-gray-600 text-right">Lead Time</th>
-                    <th className="pb-2 font-medium text-gray-600">Estado</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {topOrderItems.map((item, i) => {
-                    const orderCost = (Number(item.cantidad_requerida) || 0) * (Number(item.costo_unitario) || 0);
-                    return (
-                      <tr key={i} className="hover:bg-gray-50 cursor-pointer" onDoubleClick={() => setDetailRecord(item as unknown as Record<string, unknown>)} title="Doble clic para ver/editar detalle">
-                        <td className="py-2 font-mono text-xs">{item.codigo}</td>
-                        <td className="py-2 max-w-[200px] truncate" title={item.descripcion}>{item.descripcion}</td>
-                        <td className="py-2">
-                          <Badge variant={item.abc_class === 'A' ? 'success' : item.abc_class === 'B' ? 'warning' : 'default'}>
-                            {item.abc_class || '—'}
-                          </Badge>
-                        </td>
-                        <td className="py-2 text-xs">{item.proveedor || '—'}</td>
-                        <td className="py-2 text-right font-medium">{fmt(Number(item.cantidad_requerida) || 0)}</td>
-                        <td className="py-2 text-right">{fmtUSD(Number(item.costo_unitario) || 0)}</td>
-                        <td className="py-2 text-right font-bold">{fmtUSD(orderCost)}</td>
-                        <td className="py-2 text-right">{Number(item.lead_time_dias) || 0}d</td>
-                        <td className="py-2">
-                          {item.alerta_desabasto === 'Alerta' ? (
-                            <Badge variant="error">Alerta</Badge>
-                          ) : (
-                            <Badge variant="warning">Pedir</Badge>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <FilterableTable<MRPItem>
+              data={topOrderItems}
+              columns={orderColumns}
+              maxRows={30}
+              onRowDoubleClick={(item) => setDetailRecord(item as unknown as Record<string, unknown>)}
+              emptyText="Sin órdenes de compra pendientes."
+            />
           </CardContent>
         </Card>
 
@@ -1183,7 +1917,7 @@ export function ComprasDashboard() {
             </Card>
 
             {/* ── Nac KPIs ──────────────────────────────────────────────────────── */}
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
               <KPICard title="Total FOB" value={fmtUSD(nacTotals.fob)} icon={DollarSign} format="text" />
               <KPICard title="Valor Nacionalizado" value={fmtUSD(nacTotals.total)} icon={Scale} format="text" />
               <KPICard title="Total Impuestos" value={fmtUSD(nacTotals.dai + nacTotals.sc + nacTotals.ley6946 + nacTotals.iva)} icon={FileText} format="text"
@@ -1211,7 +1945,8 @@ export function ComprasDashboard() {
                       <PieChart>
                         <Pie data={nacCostComposition} dataKey="value" nameKey="name" cx="50%" cy="50%"
                              outerRadius={110} innerRadius={50}
-                             label={({ name, percent }) => percent > 0.03 ? `${name}: ${(percent * 100).toFixed(0)}%` : ''}>
+                             label={({ name, percent }) => percent > 0.04 ? `${name}: ${(percent * 100).toFixed(0)}%` : ''}
+                             labelLine={{ strokeWidth: 1 }}>
                           {nacCostComposition.map((entry, i) => (
                             <Cell key={i} fill={entry.color} />
                           ))}
@@ -1250,8 +1985,8 @@ export function ComprasDashboard() {
                   <ResponsiveContainer width="100%" height={300}>
                     <BarChart data={nacByOrigin}>
                       <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="origen" tick={{ fontSize: 10 }} />
-                      <YAxis tickFormatter={v => fmtUSD(v)} tick={{ fontSize: 9 }} />
+                      <XAxis dataKey="origen" tick={{ fontSize: 11 }} interval={0} />
+                      <YAxis tickFormatter={v => fmtUSD(v)} tick={{ fontSize: 10 }} width={70} />
                       <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => fmtUSD(v)} />
                       <Legend wrapperStyle={{ fontSize: '11px' }} />
                       <Bar dataKey="fob" name="FOB" stackId="a" fill="#1A4A28" />
@@ -1529,7 +2264,7 @@ export function ComprasDashboard() {
           </>
         )}
 
-        {/* ── Stockout Alert Items ────────────────────────────────────────── */}
+        {/* ── Stockout Alert Items with column filters ──────────────────── */}
         {alertItems.length > 0 && (
           <Card className="border-red-200">
             <CardHeader>
@@ -1539,43 +2274,381 @@ export function ComprasDashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-gray-200 text-left">
-                      <th className="pb-2 font-medium text-gray-600">Código</th>
-                      <th className="pb-2 font-medium text-gray-600">Descripción</th>
-                      <th className="pb-2 font-medium text-gray-600">Proveedor</th>
-                      <th className="pb-2 font-medium text-gray-600 text-right">Inventario</th>
-                      <th className="pb-2 font-medium text-gray-600 text-right">Mínimo</th>
-                      <th className="pb-2 font-medium text-gray-600 text-right">Consumo/mes</th>
-                      <th className="pb-2 font-medium text-gray-600 text-right">Cobertura</th>
-                      <th className="pb-2 font-medium text-gray-600 text-right">Valor Inv.</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {alertItems.map((item, i) => (
-                      <tr key={i} className="hover:bg-red-50/30 cursor-pointer" onDoubleClick={() => setDetailRecord(item as unknown as Record<string, unknown>)} title="Doble clic para ver/editar detalle">
-                        <td className="py-2 font-mono text-xs">{item.codigo}</td>
-                        <td className="py-2 max-w-[200px] truncate" title={item.descripcion}>{item.descripcion}</td>
-                        <td className="py-2 text-xs">{item.proveedor || '—'}</td>
-                        <td className="py-2 text-right font-medium">{fmt(Number(item.inventario_disponible) || 0)}</td>
-                        <td className="py-2 text-right">{fmt(Number(item.minimo_inventario) || 0)}</td>
-                        <td className="py-2 text-right">{fmt(Number(item.consumo_promedio) || 0)}</td>
-                        <td className="py-2 text-right">
-                          <Badge variant={Number(item.dias_cobertura) < 15 ? 'error' : 'warning'}>
-                            {Math.round(Number(item.dias_cobertura) || 0)}d
-                          </Badge>
-                        </td>
-                        <td className="py-2 text-right font-bold">{fmtUSD(Number(item.costo_total_inventario) || 0)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <FilterableTable<MRPItem>
+                data={alertItems}
+                columns={alertColumns}
+                maxRows={30}
+                hoverClass="hover:bg-red-50/30"
+                onRowDoubleClick={(item) => setDetailRecord(item as unknown as Record<string, unknown>)}
+                emptyText="Sin alertas de desabasto."
+              />
             </CardContent>
           </Card>
         )}
+
+        {/* ── Analítica Predictiva de Proveeduría ─────────────── */}
+        <div className="border-t-4 border-[#1A4A28] pt-6 mt-2">
+          <h2 className="text-xl font-bold text-gray-900 mb-1 flex items-center gap-2">
+            <Activity className="w-6 h-6 text-[#1A4A28]" />
+            Analítica Predictiva de Proveeduría
+          </h2>
+          <p className="text-sm text-gray-500 mb-4 ml-8">Modelos de optimización de inventario, análisis de demanda, impacto en capital de trabajo y riesgo de proveedores</p>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* P1: Inventory Burn Rate */}
+          <Card>
+            <CardHeader><CardTitle className="flex items-center gap-2 text-base"><TrendingDown className="w-4 h-4 text-red-500" />Tasa de Consumo de Inventario</CardTitle></CardHeader>
+            <CardContent>
+              {burnRate.length > 0 ? (
+                <ResponsiveContainer width="100%" height={280}>
+                  <ComposedChart data={burnRate}>
+                    <defs>
+                      <linearGradient id="stockGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#1A4A28" stopOpacity={0.2} /><stop offset="95%" stopColor="#1A4A28" stopOpacity={0} /></linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="mes" stroke="#9ca3af" fontSize={10} interval={0} angle={-25} textAnchor="end" height={45} />
+                    <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => fmtUSD(v)} width={70} />
+                    <Tooltip formatter={(v: number) => fmtUSD(v)} contentStyle={tooltipStyle} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Area type="monotone" dataKey="projectedStock" stroke="#1A4A28" strokeWidth={2} fill="url(#stockGrad)" name="Stock Proy. $" />
+                    <Bar dataKey="consumo" fill="#C9A84C" name="Consumo Uds" radius={[3, 3, 0, 0]} opacity={0.7} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              ) : <p className="text-sm text-gray-400 text-center py-12">Se requieren al menos 2 meses de datos.</p>}
+              <p className="text-[9px] text-gray-400 text-center mt-1">Proyección de agotamiento basada en consumo histórico mensual</p>
+            </CardContent>
+          </Card>
+
+          {/* P2: Supplier Risk Score */}
+          <Card>
+            <CardHeader><CardTitle className="flex items-center gap-2 text-base"><ShieldCheck className="w-4 h-4 text-[#1A4A28]" />Score de Riesgo por Proveedor</CardTitle></CardHeader>
+            <CardContent>
+              {supplierRisk.length > 0 ? (
+                <ResponsiveContainer width="100%" height={280}>
+                  <BarChart data={supplierRisk} layout="vertical" margin={{ left: 10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis type="number" stroke="#9ca3af" fontSize={10} tickFormatter={v => fmtUSD(v)} />
+                    <YAxis type="category" dataKey="prov" stroke="#9ca3af" fontSize={10} width={160} />
+                    <Tooltip formatter={(v: number, name: string) => name.includes('Lead') ? `${v.toFixed(0)} días` : fmtUSD(v)} contentStyle={tooltipStyle} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Bar dataKey="riskScore" fill={ARA_COLORS.red} name="Risk Score $" radius={[0, 4, 4, 0]} opacity={0.7} />
+                    <Bar dataKey="invValue" fill={ARA_COLORS.primary} name="Valor Inv. $" radius={[0, 4, 4, 0]} opacity={0.5} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : <p className="text-sm text-gray-400 text-center py-12">Sin datos de proveedores.</p>}
+              <p className="text-[9px] text-gray-400 text-center mt-1">Risk Score = Valor Inventario × Factor Lead Time. Mayor score = mayor riesgo de desabasto</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* P3: Coverage Risk Distribution */}
+          <Card>
+            <CardHeader><CardTitle className="flex items-center gap-2 text-base"><AlertTriangle className="w-4 h-4 text-orange-500" />Distribución de Riesgo por Cobertura</CardTitle></CardHeader>
+            <CardContent>
+              {coverageRisk.length > 0 ? (
+                <ResponsiveContainer width="100%" height={280}>
+                  <ComposedChart data={coverageRisk}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="label" stroke="#9ca3af" fontSize={10} interval={0} angle={-20} textAnchor="end" height={45} />
+                    <YAxis yAxisId="left" stroke="#9ca3af" fontSize={10} tickFormatter={v => fmtUSD(v)} width={70} />
+                    <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" fontSize={10} tickFormatter={v => `${v}%`} width={45} />
+                    <Tooltip contentStyle={tooltipStyle} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Bar yAxisId="left" dataKey="value" name="Valor en Riesgo $" radius={[3, 3, 0, 0]}>
+                      {coverageRisk.map((b, i) => <Cell key={i} fill={b.color} opacity={0.8} />)}
+                    </Bar>
+                    <Line yAxisId="right" type="monotone" dataKey="pctValue" stroke={ARA_COLORS.red} strokeWidth={2} dot={{ r: 3 }} name="% del Total" />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              ) : <p className="text-sm text-gray-400 text-center py-12">Sin datos de cobertura.</p>}
+              <p className="text-[9px] text-gray-400 text-center mt-1">Valor de inventario en riesgo por nivel de cobertura — rojo = desabasto inminente</p>
+            </CardContent>
+          </Card>
+
+          {/* P4: ABC Pareto Concentration */}
+          <Card>
+            <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Target className="w-4 h-4 text-[#1A4A28]" />Concentración Pareto ABC</CardTitle></CardHeader>
+            <CardContent>
+              {abcPareto.length > 0 ? (
+                <ResponsiveContainer width="100%" height={280}>
+                  <ComposedChart data={abcPareto}>
+                    <defs>
+                      <linearGradient id="paretoGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#C9A84C" stopOpacity={0.3} /><stop offset="95%" stopColor="#C9A84C" stopOpacity={0} /></linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="pctItems" stroke="#9ca3af" fontSize={10} interval={0} />
+                    <YAxis yAxisId="left" stroke="#9ca3af" fontSize={10} tickFormatter={v => `${v}%`} domain={[0, 100]} width={45} />
+                    <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" fontSize={10} tickFormatter={v => fmtUSD(v)} width={70} />
+                    <Tooltip contentStyle={tooltipStyle} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <ReferenceLine yAxisId="left" y={80} stroke={ARA_COLORS.red} strokeDasharray="4 4" label={{ value: '80%', position: 'right', fontSize: 9, fill: ARA_COLORS.red }} />
+                    <Area yAxisId="left" type="monotone" dataKey="cumValuePct" stroke="#C9A84C" strokeWidth={2.5} fill="url(#paretoGrad)" name="% Valor Acumulado" />
+                    <Bar yAxisId="right" dataKey="cumValue" fill={ARA_COLORS.primary} name="Valor Acumulado $" radius={[3, 3, 0, 0]} opacity={0.4} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              ) : <p className="text-sm text-gray-400 text-center py-12">Sin datos de inventario.</p>}
+              <p className="text-[9px] text-gray-400 text-center mt-1">Curva de Pareto: % de SKUs vs % de valor acumulado — línea roja = regla 80/20</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* ── P5: EOQ Analysis ──────────────────────────────────────────── */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Target className="w-4 h-4 text-[#C9A84C]" />
+              Modelo EOQ (Cantidad Económica de Pedido) — Wilson
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="bg-amber-50/50 rounded-lg p-3 mb-4 border border-amber-200">
+              <div className="font-mono text-xs text-gray-700 mb-2">
+                <span className="text-[#1A4A28] font-bold">EOQ</span> = √(2 × D × S / H)
+                <span className="text-gray-400 ml-2">D=demanda anual, S=costo fijo por orden ($50), H=costo de mantener (25% × costo unit.)</span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                <div className="bg-white rounded p-2">
+                  <p className="text-[10px] text-gray-500 uppercase">SKUs Analizados</p>
+                  <p className="text-sm font-bold">{fmt(eoqAnalysis.length)}</p>
+                </div>
+                <div className="bg-white rounded p-2">
+                  <p className="text-[10px] text-gray-500 uppercase">Ahorro Potencial Total</p>
+                  <p className="text-sm font-bold text-[#1A4A28]">{fmtUSD(totalEOQSavings)}</p>
+                </div>
+                <div className="bg-white rounded p-2">
+                  <p className="text-[10px] text-gray-500 uppercase">Ahorro Prom. / SKU</p>
+                  <p className="text-sm font-bold">{eoqAnalysis.length > 0 ? fmtUSD(totalEOQSavings / eoqAnalysis.length) : '$0'}</p>
+                </div>
+                <div className="bg-white rounded p-2">
+                  <p className="text-[10px] text-gray-500 uppercase">% Ahorro vs Actual</p>
+                  <p className="text-sm font-bold">{totalInvValue > 0 ? fmtPct((totalEOQSavings / totalInvValue) * 100) : '0%'}</p>
+                </div>
+              </div>
+            </div>
+            {eoqAnalysis.length > 0 && (
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={eoqAnalysis.slice(0, 12)} layout="vertical" margin={{ left: 10, right: 10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis type="number" stroke="#9ca3af" fontSize={10} tickFormatter={v => fmt(v)} />
+                  <YAxis type="category" dataKey="codigo" stroke="#9ca3af" fontSize={9} width={80} />
+                  <Tooltip contentStyle={tooltipStyle} formatter={(v: number, name: string) => [name.includes('$') ? fmtUSD(v) : fmt(v), name]} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar dataKey="eoq" fill="#1A4A28" name="EOQ Óptimo" radius={[0, 4, 4, 0]} opacity={0.8} />
+                  <Bar dataKey="currentOrder" fill="#C9A84C" name="Pedido Actual" radius={[0, 4, 4, 0]} opacity={0.6} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+            <p className="text-[9px] text-gray-400 text-center mt-1">Top 12 SKUs con mayor potencial de ahorro al adoptar EOQ óptimo vs pedido actual</p>
+          </CardContent>
+        </Card>
+
+        {/* ── P6: Import vs Local ─────────────────────────────────────────── */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Globe className="w-4 h-4 text-[#3B82F6]" />
+                Importado vs Local — Comparativo Estratégico
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={importVsLocal}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="tipo" stroke="#9ca3af" fontSize={11} />
+                  <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => fmtUSD(v)} width={70} />
+                  <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => fmtUSD(v)} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar dataKey="invValue" fill="#1A4A28" name="Valor Inventario" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="consumoValue" fill="#C9A84C" name="Consumo Mensual $" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+              <div className="mt-3 space-y-2">
+                {importVsLocal.map((g, i) => (
+                  <div key={i} className="flex items-center justify-between text-xs bg-gray-50 rounded p-2">
+                    <span className="font-medium">{g.tipo}</span>
+                    <div className="flex gap-4 text-gray-600">
+                      <span>{fmt(g.skus)} SKUs</span>
+                      <span>LT: {g.avgLT}d</span>
+                      <span>Cob: {g.avgCov}d</span>
+                      <span className={g.alertPct > 10 ? 'text-red-600 font-bold' : ''}>{g.alertPct}% alertas</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[9px] text-gray-400 text-center mt-2">Comparación de lead time, cobertura y tasa de alerta entre ítems importados y locales</p>
+            </CardContent>
+          </Card>
+
+          {/* ── P7: Inventory Turnover ──────────────────────────────────────── */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <RefreshCw className="w-4 h-4 text-[#1A4A28]" />
+                Rotación de Inventario por Clase ABC
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="bg-green-50/50 rounded-lg p-3 mb-3 border border-green-200 flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] text-gray-500 uppercase">Rotación Global</p>
+                  <p className="text-lg font-bold text-[#1A4A28]">{overallTurnover.toFixed(1)}x <span className="text-xs font-normal text-gray-500">anual</span></p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] text-gray-500 uppercase">Días en Mano (DIO)</p>
+                  <p className="text-lg font-bold text-gray-900">{overallTurnover > 0 ? Math.round(365 / overallTurnover) : '—'} <span className="text-xs font-normal text-gray-500">días</span></p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={240}>
+                <ComposedChart data={turnoverByABC}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="cls" stroke="#9ca3af" fontSize={11} />
+                  <YAxis yAxisId="left" stroke="#9ca3af" fontSize={10} tickFormatter={v => `${v.toFixed(1)}x`} />
+                  <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" fontSize={10} tickFormatter={v => `${Math.round(v)}d`} width={50} />
+                  <Tooltip contentStyle={tooltipStyle} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar yAxisId="left" dataKey="turnover" name="Rotación (veces/año)" radius={[4, 4, 0, 0]}>
+                    {turnoverByABC.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+                  </Bar>
+                  <Line yAxisId="right" type="monotone" dataKey="daysOnHand" stroke={ARA_COLORS.red} strokeWidth={2} dot={{ r: 4 }} name="Días en Mano" />
+                </ComposedChart>
+              </ResponsiveContainer>
+              <p className="text-[9px] text-gray-400 text-center mt-1">Rotación = (Consumo Anual $) / Inventario $. Mayor rotación = menor capital inmovilizado</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* ── P8: Demand Volatility ───────────────────────────────────────── */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Activity className="w-4 h-4 text-[#F59E0B]" />
+                Volatilidad de Demanda — Coeficiente de Variación
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={volatilityBuckets}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="label" stroke="#9ca3af" fontSize={9} interval={0} angle={-15} textAnchor="end" height={50} />
+                  <YAxis stroke="#9ca3af" fontSize={10} />
+                  <Tooltip contentStyle={tooltipStyle} formatter={(v: number, name: string) => [name.includes('$') ? fmtUSD(v) : fmt(v), name]} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar dataKey="count" name="SKUs" radius={[4, 4, 0, 0]}>
+                    {volatilityBuckets.map((b, i) => <Cell key={i} fill={b.color} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {volatilityBuckets.map((b, i) => (
+                  <div key={i} className="flex items-center justify-between text-xs bg-gray-50 rounded p-1.5">
+                    <span className="flex items-center gap-1.5">
+                      <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: b.color }} />
+                      {b.label}
+                    </span>
+                    <span className="font-medium">{fmt(b.count)} · {fmtUSD(b.value)}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[9px] text-gray-400 text-center mt-2">CV = σ / μ. Ítems erráticos (CV{'>'} 1.0) requieren stock de seguridad mayor o modelo MTO</p>
+            </CardContent>
+          </Card>
+
+          {/* ── P9: Working Capital Impact ──────────────────────────────────── */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <DollarSign className="w-4 h-4 text-[#1A4A28]" />
+                Impacto en Capital de Trabajo — Escenarios de Optimización
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="bg-blue-50/50 rounded-lg p-3 mb-3 border border-blue-200 grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-[10px] text-gray-500 uppercase">DIO Actual</p>
+                  <p className="text-lg font-bold text-gray-900">{workingCapitalImpact.daysInventoryOutstanding} <span className="text-xs font-normal text-gray-500">días</span></p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-gray-500 uppercase">Consumo Diario</p>
+                  <p className="text-lg font-bold text-gray-900">{fmtUSD(workingCapitalImpact.dailyConsumptionCost)} <span className="text-xs font-normal text-gray-500">/día</span></p>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={240}>
+                <ComposedChart data={workingCapitalImpact.scenarios}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="scenario" stroke="#9ca3af" fontSize={11} />
+                  <YAxis yAxisId="left" stroke="#9ca3af" fontSize={10} tickFormatter={v => fmtUSD(v)} width={70} />
+                  <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" fontSize={10} tickFormatter={v => `${v}d`} width={40} />
+                  <Tooltip contentStyle={tooltipStyle} formatter={(v: number, name: string) => [name.includes('DIO') ? `${v} días` : fmtUSD(v), name]} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar yAxisId="left" dataKey="freedCash" fill="#3B82F6" name="Cash Liberado" radius={[4, 4, 0, 0]} opacity={0.7} />
+                  <Bar yAxisId="left" dataKey="annualSavings" fill="#1A4A28" name="Ahorro Anual (8%)" radius={[4, 4, 0, 0]} opacity={0.8} />
+                  <Line yAxisId="right" type="monotone" dataKey="dio" stroke={ARA_COLORS.red} strokeWidth={2} dot={{ r: 4 }} name="DIO (días)" />
+                </ComposedChart>
+              </ResponsiveContainer>
+              <p className="text-[9px] text-gray-400 text-center mt-1">Simulación: reducción de inventario libera capital. Ahorro = cash liberado × 8% costo de oportunidad anual</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* ── P10: Supplier Dependency Matrix ──────────────────────────────── */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Truck className="w-4 h-4 text-[#EF4444]" />
+              Matriz de Dependencia de Proveedores — Riesgo de Fuente Única
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b-2 border-gray-300 text-left bg-gray-50">
+                    <th className="py-2 px-2 font-semibold text-gray-700">Proveedor</th>
+                    <th className="py-2 px-2 font-semibold text-gray-700">Origen</th>
+                    <th className="py-2 px-2 font-semibold text-gray-700 text-right">SKUs</th>
+                    <th className="py-2 px-2 font-semibold text-gray-700 text-right">Valor Inv.</th>
+                    <th className="py-2 px-2 font-semibold text-gray-700 text-right">LT Prom.</th>
+                    <th className="py-2 px-2 font-semibold text-gray-700 text-right">Fuente Única</th>
+                    <th className="py-2 px-2 font-semibold text-gray-700 text-right">Valor en Riesgo</th>
+                    <th className="py-2 px-2 font-semibold text-gray-700 text-right">Risk Score</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {supplierDependency.map((row, i) => (
+                    <tr key={i} className="hover:bg-red-50/30">
+                      <td className="py-1.5 px-2 font-medium max-w-[160px] truncate" title={row.prov}>{row.prov}</td>
+                      <td className="py-1.5 px-2 text-gray-500">{row.origins}</td>
+                      <td className="py-1.5 px-2 text-right">{fmt(row.skus)}</td>
+                      <td className="py-1.5 px-2 text-right font-medium">{fmtUSD(row.invValue)}</td>
+                      <td className="py-1.5 px-2 text-right">{row.avgLT}d</td>
+                      <td className="py-1.5 px-2 text-right">
+                        <Badge variant={row.singleSourcePct > 80 ? 'error' : row.singleSourcePct > 50 ? 'warning' : 'success'}>
+                          {row.singleSourcePct}% ({fmt(row.singleSource)})
+                        </Badge>
+                      </td>
+                      <td className="py-1.5 px-2 text-right font-bold text-red-600">{fmtUSD(row.singleSourceValue)}</td>
+                      <td className="py-1.5 px-2 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <div className="w-16 h-2 bg-gray-200 rounded-full overflow-hidden">
+                            <div className="h-full rounded-full" style={{
+                              width: `${Math.min(100, (row.riskScore / Math.max(1, supplierDependency[0]?.riskScore || 1)) * 100)}%`,
+                              backgroundColor: row.riskScore > supplierDependency[0]?.riskScore * 0.7 ? '#EF4444' : row.riskScore > supplierDependency[0]?.riskScore * 0.3 ? '#F59E0B' : '#1A4A28',
+                            }} />
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-[9px] text-gray-400 text-center mt-2">Risk Score = Valor Fuente Única × Factor Lead Time. Proveedores con alto % de fuente única y LT largo representan mayor riesgo de desabasto</p>
+          </CardContent>
+        </Card>
 
         {/* ── Narrative ──────────────────────────────────────────────────── */}
         <Card className="border-t-4 border-t-[#1A4A28]">
@@ -1600,6 +2673,162 @@ export function ComprasDashboard() {
             </div>
           </CardContent>
         </Card>
+
+        {/* ══════════════════════════════════════════════════════════════════ */}
+        {/* ── PcGraf ERP — Conexión a Base de Datos Legacy ──────────────── */}
+        {/* ══════════════════════════════════════════════════════════════════ */}
+        <div className="mt-4 pt-6 border-t-4 border-[#C9A84C]">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-bold text-gray-900 flex items-center gap-3">
+                <Database className="w-6 h-6 text-[#C9A84C]" />
+                PcGraf ERP — Conexión SQL Server
+              </h2>
+              <p className="text-gray-500 mt-1 text-sm">
+                Consultas directas al ERP legacy (192.168.1.3) para refrescar datos de compras, inventarios y proveedores.
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              {pcgrafStatus && (
+                <Badge variant={pcgrafStatus.status === 'connected' ? 'success' : pcgrafStatus.status === 'error' ? 'error' : 'default'}>
+                  {pcgrafStatus.status === 'connected' ? <Wifi className="w-3 h-3 mr-1" /> : <WifiOff className="w-3 h-3 mr-1" />}
+                  {pcgrafStatus.status === 'connected' ? 'Conectado' : pcgrafStatus.status === 'error' ? 'Error' : 'No configurado'}
+                </Badge>
+              )}
+              <button
+                onClick={() => { setShowPcgraf(!showPcgraf); if (!pcgrafStatus) checkPcgraf(); }}
+                className="flex items-center gap-2 px-4 py-2 bg-[#C9A84C] text-white rounded-lg text-sm hover:bg-[#B8973B] transition-colors"
+              >
+                <Server className="w-4 h-4" />
+                {showPcgraf ? 'Ocultar' : 'Abrir Consola'}
+                {showPcgraf ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {showPcgraf && (
+          <Card className="border-[#C9A84C]">
+            <CardContent className="p-4 space-y-4">
+              {/* Connection status */}
+              {pcgrafStatus && (
+                <div className={`rounded-lg p-3 text-sm ${pcgrafStatus.status === 'connected' ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
+                  {pcgrafStatus.status === 'connected' ? (
+                    <div className="flex items-center gap-2">
+                      <Wifi className="w-4 h-4 text-green-600" />
+                      <span className="text-green-800 font-medium">Conectado a {pcgrafStatus.server_name || pcgrafStatus.server}</span>
+                      {pcgrafStatus.version && <span className="text-green-600 text-xs ml-2">({pcgrafStatus.version.split('\n')[0].slice(0, 60)})</span>}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <WifiOff className="w-4 h-4 text-red-600" />
+                      <span className="text-red-800 font-medium">Error de conexión: {pcgrafStatus.error || 'Desconocido'}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* DB selector + SQL input */}
+              <div className="flex gap-3">
+                <select
+                  value={pcgrafSelectedDb}
+                  onChange={e => setPcgrafSelectedDb(e.target.value)}
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-48"
+                >
+                  <option value="">Base de datos...</option>
+                  {pcgrafDbs.map(db => <option key={db} value={db}>{db}</option>)}
+                </select>
+                <input
+                  type="text"
+                  value={pcgrafSql}
+                  onChange={e => setPcgrafSql(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && runPcgrafQuery()}
+                  placeholder="SELECT TOP 100 * FROM dbo.Articulos"
+                  className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-[#C9A84C]"
+                />
+                <button
+                  onClick={runPcgrafQuery}
+                  disabled={pcgrafLoading || !pcgrafSql.trim()}
+                  className="px-4 py-2 bg-[#1A4A28] text-white rounded-lg text-sm hover:bg-[#2D6A3F] disabled:opacity-50 flex items-center gap-2"
+                >
+                  {pcgrafLoading ? <LoadingSpinner size="sm" /> : <Search className="w-4 h-4" />}
+                  Ejecutar
+                </button>
+                <button
+                  onClick={checkPcgraf}
+                  className="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                  title="Reconectar"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Quick queries */}
+              <div className="flex flex-wrap gap-2">
+                <span className="text-xs text-gray-500 py-1">Consultas rápidas:</span>
+                {[
+                  { label: 'Artículos', sql: 'SELECT TOP 200 * FROM dbo.Articulos' },
+                  { label: 'Proveedores', sql: 'SELECT TOP 200 * FROM dbo.Proveedores' },
+                  { label: 'Órdenes de Compra', sql: 'SELECT TOP 200 * FROM dbo.OrdenesCompra' },
+                  { label: 'Inventario', sql: 'SELECT TOP 200 * FROM dbo.Inventario' },
+                  { label: 'Tablas del sistema', sql: "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES ORDER BY TABLE_SCHEMA, TABLE_NAME" },
+                ].map((q, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setPcgrafSql(q.sql)}
+                    className="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700"
+                  >
+                    {q.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Results */}
+              {pcgrafResult && (
+                <div>
+                  {pcgrafResult.error ? (
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+                      <AlertTriangle className="w-4 h-4 inline mr-1" />
+                      {pcgrafResult.error}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs text-gray-500">{pcgrafResult.row_count} filas · {pcgrafResult.columns.length} columnas</span>
+                      </div>
+                      <div className="overflow-x-auto max-h-[400px] overflow-y-auto border rounded-lg">
+                        <table className="w-full text-xs">
+                          <thead className="sticky top-0 bg-gray-50">
+                            <tr className="border-b border-gray-200">
+                              {pcgrafResult.columns.map((col, i) => (
+                                <th key={i} className="py-2 px-2 text-left font-medium text-gray-600 whitespace-nowrap">{col}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {pcgrafResult.rows.slice(0, 200).map((row, ri) => (
+                              <tr key={ri} className="hover:bg-blue-50/30">
+                                {pcgrafResult.columns.map((col, ci) => (
+                                  <td key={ci} className="py-1.5 px-2 whitespace-nowrap max-w-[200px] truncate" title={String(row[col] ?? '')}>
+                                    {String(row[col] ?? '')}
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <p className="text-[10px] text-gray-400 italic">
+                Conexión directa a PcGraf SQL Server (192.168.1.3). Solo consultas SELECT permitidas. Los datos se pueden usar para refrescar las tablas de Supabase (silver_finance.mrp_master).
+              </p>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {/* Record Detail Modal */}

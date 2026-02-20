@@ -1,0 +1,47 @@
+# LangChain / LangGraph
+langchain>=0.3.0
+langchain-openai>=0.3.0
+langchain-community>=0.3.0
+langchain-huggingface>=0.1.0
+langgraph>=0.2.0
+langsmith>=0.2.0
+
+# Vector store & embeddings
+faiss-cpu>=1.8.0
+sentence-transformers>=2.2.0
+
+# Modal deployment
+modal>=0.67.0
+
+# Supabase
+supabase>=2.0.0
+
+# Data processing
+openpyxl>=3.1.0
+pandas>=2.0.0
+
+# Web search
+tavily-python>=0.5.0
+
+# Analytics / charting
+matplotlib>=3.8.0
+seaborn>=0.13.0
+numpy>=1.26.0
+
+# AG-UI protocol
+ag-ui-protocol>=0.1.0
+
+# SSE streaming
+sse-starlette>=2.0.0
+starlette>=0.38.0
+uvicorn>=0.30.0
+
+# SQL Server (PcGraf ERP)
+pymssql>=2.2.0
+
+# Kafka (CDC event streaming)
+kafka-python>=2.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+httpx>=0.27.0

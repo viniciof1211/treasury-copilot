@@ -1,0 +1,53 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Strimzi Kafka Operator — manages Kafka clusters on Kubernetes
+# Install via: kubectl apply -f 02-strimzi-operator.yaml
+# This applies the Strimzi 0.43.0 ClusterRoleBindings + Operator Deployment
+# into the 'kafka' namespace.
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# ALTERNATIVE: Install via Helm (simpler):
+#   helm repo add strimzi https://strimzi.io/charts/
+#   helm repo update
+#   helm install strimzi-operator strimzi/strimzi-kafka-operator \
+#     --namespace kafka --create-namespace \
+#     --set watchNamespaces="{kafka}" \
+#     --version 0.43.0
+#
+# If using Helm, skip this file entirely.
+# If NOT using Helm, apply the official install YAML:
+# ══════════════════════════════════════════════════════════════════════════════
+---
+# This is a pointer manifest. The actual Strimzi operator is large (5000+ lines).
+# Apply it directly from the Strimzi release:
+#
+#   kubectl create -f https://strimzi.io/install/latest?namespace=kafka
+#
+# Or pin a specific version:
+#   kubectl create -f https://github.com/strimzi/strimzi-kafka-operator/releases/download/0.43.0/strimzi-cluster-operator-0.43.0.yaml -n kafka
+#
+# After the operator is running, proceed with 03-kafka-cluster.yaml
+# ══════════════════════════════════════════════════════════════════════════════
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: strimzi-install-instructions
+  namespace: kafka
+  labels:
+    app.kubernetes.io/part-of: treasury-copilot
+data:
+  README: |
+    Install Strimzi Kafka Operator using ONE of these methods:
+
+    METHOD A — Direct YAML (recommended for production):
+      kubectl create -f https://strimzi.io/install/latest?namespace=kafka
+
+    METHOD B — Helm chart:
+      helm repo add strimzi https://strimzi.io/charts/
+      helm install strimzi-operator strimzi/strimzi-kafka-operator \
+        --namespace kafka --version 0.43.0
+
+    Verify operator is running:
+      kubectl get pods -n kafka -l name=strimzi-cluster-operator
+
+    Then apply the Kafka cluster:
+      kubectl apply -f 03-kafka-cluster.yaml

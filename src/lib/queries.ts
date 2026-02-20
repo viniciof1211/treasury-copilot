@@ -59,6 +59,13 @@ export interface MRPItem {
   cantidad_requerida: number; analisis_parametros: string | null;
   familia: string; infaltable: string; descontinuado: string;
   subclasificacion: string;
+  // Segmentation & filtering
+  empresa: string; unidad_negocio: string; bodega: string;
+  tipo_compra: string; // 'Local', 'Internacional', 'Sin Definir'
+  periodo_mes: number; periodo_anio: number;
+  bodega_excluida: boolean;
+  // Curation
+  curado_por: string; curado_at: string; notas_curacion: string;
   created_at: string; ingest_run_id: string;
 }
 

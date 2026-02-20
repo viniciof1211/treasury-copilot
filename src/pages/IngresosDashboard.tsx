@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   TrendingUp, TrendingDown, AlertTriangle, Lightbulb, RefreshCw,
   Wallet, DollarSign, Users, Receipt, BarChart3, Clock, ShieldCheck,
-  Target, FileText, CalendarDays, Banknote, Building2,
+  Target, FileText, CalendarDays, Banknote, Building2, Activity,
 } from 'lucide-react';
 import { Layout } from '../components/layout/Layout';
 import { KPICard } from '../components/dashboard/KPICard';
@@ -24,6 +24,7 @@ import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend, ComposedChart, Line, ReferenceLine, PieChart, Pie, Cell,
 } from 'recharts';
+import { FilterableTable, type ColumnDef } from '../components/ui/FilterableTable';
 
 // ── Field definitions for detail modals ──────────────────────────────────────
 
@@ -362,6 +363,95 @@ export function IngresosDashboard() {
       breakeven: Math.round(budgetTarget * 0.9),
     }));
   }, [monthlyIncome, budgetTarget]);
+
+  // ── Predictive Analytics ─────────────────────────────────────────────────────
+
+  // P1: Income Forecast — SMA-3 extrapolation
+  const incomeForecast = useMemo(() => {
+    if (monthlyIncome.length < 2) return [] as (typeof monthlyIncome[0] & { type: string })[];
+    const hist = monthlyIncome.map(m => ({ ...m, type: 'real' as string }));
+    const w = Math.min(3, hist.length);
+    const avg = hist.slice(-w).reduce((s, m) => s + m.real, 0) / w;
+    const last = hist[hist.length - 1].month;
+    const fc: typeof hist = [];
+    for (let i = 1; i <= 6; i++) {
+      const d = new Date(last + '-01'); d.setMonth(d.getMonth() + i);
+      const mo = d.toISOString().slice(0, 7);
+      fc.push({ month: mo, label: formatMonthYear(mo + '-01'), real: Math.round(avg * (1 + i * 0.01)), projected: null, cumulative: 0, budget: Math.round(budgetTarget), ops: 0, type: 'forecast' as string });
+    }
+    return [...hist, ...fc];
+  }, [monthlyIncome, budgetTarget]);
+
+  // P2: CxC Recovery Projection — expected collection timeline
+  const cxcRecovery = useMemo(() => {
+    if (!hasCxc) return [] as { month: string; label: string; pending: number; expected: number; atRisk: number }[];
+    const byMonth: Record<string, { month: string; pending: number; expected: number; atRisk: number }> = {};
+    filteredCxc.filter(c => c.estado !== 'Pagada').forEach(c => {
+      const mo = (c.vencimiento || '').slice(0, 7);
+      if (!mo) return;
+      if (!byMonth[mo]) byMonth[mo] = { month: mo, pending: 0, expected: 0, atRisk: 0 };
+      const amt = asUSD(c.monto || 0, c.moneda);
+      byMonth[mo].pending += amt;
+      if ((c.dias_mora || 0) <= 30) byMonth[mo].expected += amt * 0.9;
+      else if ((c.dias_mora || 0) <= 60) byMonth[mo].expected += amt * 0.7;
+      else byMonth[mo].atRisk += amt;
+    });
+    return Object.values(byMonth).sort((a, b) => a.month.localeCompare(b.month)).map(m => ({ ...m, label: formatMonthYear(m.month + '-01') }));
+  }, [filteredCxc, hasCxc, asUSD]);
+
+  // P3: Client Risk Matrix — amount vs aging days
+  const clientRisk = useMemo(() => {
+    if (!hasCxc) return [] as { name: string; amount: number; avgDays: number; count: number; riskScore: number }[];
+    const m: Record<string, { name: string; amount: number; avgDays: number; count: number; riskScore: number }> = {};
+    filteredCxc.filter(c => c.estado !== 'Pagada').forEach(c => {
+      const cl = c.cliente || 'N/D';
+      const amt = asUSD(c.monto || 0, c.moneda);
+      const days = c.dias_mora || 0;
+      if (!m[cl]) m[cl] = { name: cl, amount: 0, avgDays: 0, count: 0, riskScore: 0 };
+      m[cl].amount += amt;
+      m[cl].avgDays += days;
+      m[cl].count++;
+      m[cl].riskScore += amt * Math.max(1, days / 30);
+    });
+    return Object.values(m)
+      .map(v => ({ ...v, avgDays: v.count > 0 ? Math.round(v.avgDays / v.count) : 0, name: v.name.length > 20 ? v.name.slice(0, 17) + '...' : v.name }))
+      .sort((a, b) => b.riskScore - a.riskScore).slice(0, 10);
+  }, [filteredCxc, hasCxc, asUSD]);
+
+  // P4: Income Volatility
+  const incomeVolatility = useMemo(() => {
+    if (monthlyIncome.length < 2) return [] as (typeof monthlyIncome[0] & { deviation: number; mean: number })[];
+    const mean = monthlyIncome.reduce((s, m) => s + m.real, 0) / monthlyIncome.length;
+    return monthlyIncome.map(m => ({
+      ...m,
+      deviation: m.real - mean,
+      mean: Math.round(mean),
+    }));
+  }, [monthlyIncome]);
+
+  // ── FilterableTable column defs ─────────────────────────────────────────────
+  const flujoColumns: ColumnDef<FlujoItem>[] = useMemo(() => [
+    { key: 'operacion', header: 'Operación', render: (r) => <span className="font-medium text-gray-900">{r.operacion || '—'}</span>, filterType: 'text' },
+    { key: 'compania', header: 'Compañía', render: (r) => <span>{r.compania || '—'}</span>, filterType: 'select' },
+    { key: 'banco', header: 'Banco', render: (r) => <span>{r.banco || '—'}</span>, filterType: 'select' },
+    { key: 'tipo', header: 'Tipo', render: (r) => <Badge variant="default" className="text-[10px]">{r.tipo || '—'}</Badge>, filterType: 'select' },
+    { key: 'cuota', header: 'Cuota', align: 'right', render: (r) => <span className="font-semibold text-emerald-700">{formatCurrency(r.cuota || 0, normalizeCurrency(r.moneda))}</span>, accessor: (r) => asUSD(r.cuota || 0, r.moneda) },
+    { key: 'principal', header: 'Principal', align: 'right', render: (r) => <span>{formatCurrency(r.principal || 0, normalizeCurrency(r.moneda))}</span>, accessor: (r) => Number(r.principal) || 0 },
+    { key: 'intereses', header: 'Intereses', align: 'right', render: (r) => <span>{formatCurrency(r.intereses || 0, normalizeCurrency(r.moneda))}</span>, accessor: (r) => Number(r.intereses) || 0 },
+    { key: 'vencimiento', header: 'Vencimiento', render: (r) => <span>{r.vencimiento ? formatShortDate(r.vencimiento) : '—'}</span>, accessor: (r) => r.vencimiento || '' },
+    { key: 'moneda', header: 'Moneda', render: (r) => <Badge variant="info" className="text-[10px]">{normalizeCurrency(r.moneda)}</Badge>, filterType: 'select', accessor: (r) => normalizeCurrency(r.moneda) },
+  ], [asUSD]);
+
+  const cxcColumns: ColumnDef<CxCItem>[] = useMemo(() => [
+    { key: 'cliente', header: 'Cliente', render: (r) => <span className="font-medium text-gray-900">{r.cliente || '—'}</span>, filterType: 'text' },
+    { key: 'factura', header: 'Factura', render: (r) => <span>{r.factura || '—'}</span>, filterType: 'text' },
+    { key: 'empresa', header: 'Empresa', render: (r) => <span>{r.empresa || '—'}</span>, filterType: 'select' },
+    { key: 'monto', header: 'Monto', align: 'right', render: (r) => <span className="font-semibold">{formatCurrency(r.monto || 0, normalizeCurrency(r.moneda))}</span>, accessor: (r) => asUSD(r.monto || 0, r.moneda) },
+    { key: 'estado', header: 'Estado', render: (r) => <Badge variant={r.estado === 'Vencida' ? 'error' : r.estado === 'Parcial' ? 'warning' : 'default'} className="text-[10px]">{r.estado}</Badge>, filterType: 'select' },
+    { key: 'dias_mora', header: 'Días Mora', align: 'right', render: (r) => { const mora = r.dias_mora || 0; const color = mora === 0 ? 'text-green-600' : mora <= 30 ? 'text-amber-600' : mora <= 60 ? 'text-orange-600' : 'text-red-600'; return <span className={`font-semibold ${color}`}>{mora}</span>; }, accessor: (r) => r.dias_mora || 0 },
+    { key: 'vencimiento', header: 'Vencimiento', render: (r) => <span>{r.vencimiento ? formatShortDate(r.vencimiento) : '—'}</span>, accessor: (r) => r.vencimiento || '' },
+    { key: 'area_comercial', header: 'Área', render: (r) => <span>{r.area_comercial || '—'}</span>, filterType: 'select' },
+  ], [asUSD]);
 
   // ── Narrative ────────────────────────────────────────────────────────────
 
@@ -739,56 +829,24 @@ export function IngresosDashboard() {
               </Card>
             </div>
 
-            {/* ── Detail Table: Ingresos por Operación (Flujo) ─── */}
+            {/* ── Detail Table: Ingresos por Operación (Flujo) with filters ─── */}
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-sm font-semibold">Detalle de Ingresos por Operación</CardTitle>
                   <Badge variant="info">{filteredFlujo.length} operaciones</Badge>
                 </div>
-                <p className="text-xs text-gray-400 mt-1">Fuente: Flujo Semanal · Doble clic en una fila para ver/editar detalle</p>
+                <p className="text-xs text-gray-400 mt-1">Fuente: Flujo Semanal</p>
               </CardHeader>
               <CardContent>
-                <div className="max-h-[480px] overflow-y-auto">
-                  <table className="w-full text-xs">
-                    <thead className="bg-gray-50 sticky top-0 z-10">
-                      <tr>
-                        <th className="text-left p-2 font-medium text-gray-600">Operación</th>
-                        <th className="text-left p-2 font-medium text-gray-600">Compañía</th>
-                        <th className="text-left p-2 font-medium text-gray-600">Banco</th>
-                        <th className="text-left p-2 font-medium text-gray-600">Tipo</th>
-                        <th className="text-right p-2 font-medium text-gray-600">Cuota</th>
-                        <th className="text-right p-2 font-medium text-gray-600">Principal</th>
-                        <th className="text-right p-2 font-medium text-gray-600">Intereses</th>
-                        <th className="text-left p-2 font-medium text-gray-600">Vencimiento</th>
-                        <th className="text-left p-2 font-medium text-gray-600">Moneda</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredFlujo.slice(0, 500).map((f, i) => {
-                        const cur = normalizeCurrency(f.moneda);
-                        return (
-                          <tr key={i}
-                            className="border-b border-gray-100 hover:bg-emerald-50/50 cursor-pointer transition-colors"
-                            onDoubleClick={() => { setDetailRecord(f as unknown as Record<string, unknown>); setDetailType('flujo'); }}>
-                            <td className="p-2 font-medium text-gray-900">{f.operacion || '—'}</td>
-                            <td className="p-2">{f.compania || '—'}</td>
-                            <td className="p-2">{f.banco || '—'}</td>
-                            <td className="p-2"><Badge variant="secondary" className="text-[10px]">{f.tipo || '—'}</Badge></td>
-                            <td className="p-2 text-right font-semibold text-emerald-700">{formatCurrency(f.cuota || 0, cur)}</td>
-                            <td className="p-2 text-right">{formatCurrency(f.principal || 0, cur)}</td>
-                            <td className="p-2 text-right">{formatCurrency(f.intereses || 0, cur)}</td>
-                            <td className="p-2">{f.vencimiento ? formatShortDate(f.vencimiento) : '—'}</td>
-                            <td className="p-2"><Badge variant="outline" className="text-[10px]">{cur}</Badge></td>
-                          </tr>
-                        );
-                      })}
-                      {filteredFlujo.length === 0 && (
-                        <tr><td colSpan={9} className="p-8 text-center text-gray-400">Sin operaciones de ingreso</td></tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                <FilterableTable<FlujoItem>
+                  data={filteredFlujo}
+                  columns={flujoColumns}
+                  maxRows={50}
+                  hoverClass="hover:bg-emerald-50/50"
+                  onRowDoubleClick={(item) => { setDetailRecord(item as unknown as Record<string, unknown>); setDetailType('flujo'); }}
+                  emptyText="Sin operaciones de ingreso."
+                />
                 <div className="flex justify-between items-center mt-3 text-xs text-gray-400 px-2">
                   <span>Total Ingresos: {fc(totalIngresos)} · Principal: {fc(totalPrincipal)} · Intereses: {fc(totalIntereses)}</span>
                   <span>Montos en USD</span>
@@ -796,72 +854,141 @@ export function IngresosDashboard() {
               </CardContent>
             </Card>
 
-            {/* ── Detail Table: CxC Pendientes ────────────────── */}
+            {/* ── Detail Table: CxC Pendientes with filters ──────────────── */}
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-sm font-semibold">Detalle CxC Pendientes</CardTitle>
-                  <Badge variant={hasCxc ? 'warning' : 'secondary'}>
+                  <Badge variant={hasCxc ? 'warning' : 'default'}>
                     {hasCxc ? `${filteredCxc.filter(c => c.estado !== 'Pagada').length} pendientes` : 'Sin datos CxC'}
                   </Badge>
                 </div>
-                {hasCxc && <p className="text-xs text-gray-400 mt-1">Doble clic en una fila para ver/editar detalle</p>}
               </CardHeader>
               <CardContent>
                 {hasCxc ? (
-                  <div className="max-h-[480px] overflow-y-auto">
-                    <table className="w-full text-xs">
-                      <thead className="bg-gray-50 sticky top-0 z-10">
-                        <tr>
-                          <th className="text-left p-2 font-medium text-gray-600">Cliente</th>
-                          <th className="text-left p-2 font-medium text-gray-600">Factura</th>
-                          <th className="text-left p-2 font-medium text-gray-600">Empresa</th>
-                          <th className="text-right p-2 font-medium text-gray-600">Monto</th>
-                          <th className="text-left p-2 font-medium text-gray-600">Estado</th>
-                          <th className="text-right p-2 font-medium text-gray-600">Días Mora</th>
-                          <th className="text-left p-2 font-medium text-gray-600">Vencimiento</th>
-                          <th className="text-left p-2 font-medium text-gray-600">Área</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredCxc.filter(c => c.estado !== 'Pagada').slice(0, 500).map((c, i) => {
-                          const cur = normalizeCurrency(c.moneda);
-                          const mora = c.dias_mora || 0;
-                          const moraColor = mora === 0 ? 'text-green-600' : mora <= 30 ? 'text-amber-600' : mora <= 60 ? 'text-orange-600' : 'text-red-600';
-                          return (
-                            <tr key={i}
-                              className="border-b border-gray-100 hover:bg-amber-50/50 cursor-pointer transition-colors"
-                              onDoubleClick={() => { setDetailRecord(c as unknown as Record<string, unknown>); setDetailType('cxc'); }}>
-                              <td className="p-2 font-medium text-gray-900">{c.cliente || '—'}</td>
-                              <td className="p-2">{c.factura || '—'}</td>
-                              <td className="p-2">{c.empresa || '—'}</td>
-                              <td className="p-2 text-right font-semibold">{formatCurrency(c.monto || 0, cur)}</td>
-                              <td className="p-2">
-                                <Badge variant={c.estado === 'Vencida' ? 'destructive' : c.estado === 'Parcial' ? 'warning' : 'secondary'} className="text-[10px]">
-                                  {c.estado}
-                                </Badge>
-                              </td>
-                              <td className={`p-2 text-right font-semibold ${moraColor}`}>{mora}</td>
-                              <td className="p-2">{c.vencimiento ? formatShortDate(c.vencimiento) : '—'}</td>
-                              <td className="p-2">{c.area_comercial || '—'}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+                  <FilterableTable<CxCItem>
+                    data={filteredCxc.filter(c => c.estado !== 'Pagada')}
+                    columns={cxcColumns}
+                    maxRows={50}
+                    hoverClass="hover:bg-amber-50/50"
+                    onRowDoubleClick={(item) => { setDetailRecord(item as unknown as Record<string, unknown>); setDetailType('cxc'); }}
+                    emptyText="Sin CxC pendientes."
+                  />
                 ) : (
                   <div className="text-center py-12 text-gray-400">
                     <FileText className="w-10 h-10 mx-auto mb-3 opacity-40" />
                     <p className="text-sm font-medium">Sin datos de Cuentas por Cobrar</p>
                     <p className="text-xs mt-1 max-w-md mx-auto">
                       Para ver el análisis de CxC, sube un archivo Excel con columnas como Cliente, Factura, Monto, Vencimiento, Estado en la sección de Fuentes de Datos.
-                      El sistema detectará automáticamente el formato CxC.
                     </p>
                   </div>
                 )}
               </CardContent>
             </Card>
+
+            {/* ── Predictive Financial Treasury Analytics ─────────────── */}
+            <div className="border-t border-gray-200 pt-6 mt-2">
+              <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+                <Activity className="w-5 h-5 text-[#1A4A28]" />
+                Predictive Financial Treasury Analytics
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* P1: Income Forecast */}
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><TrendingUp className="w-4 h-4 text-[#1A4A28]" />Pronóstico de Ingresos 6M (SMA-3)</CardTitle></CardHeader>
+                <CardContent>
+                  {incomeForecast.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={280}>
+                      <ComposedChart data={incomeForecast}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="label" stroke="#9ca3af" fontSize={9} />
+                        <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => fcc(v)} />
+                        <Tooltip formatter={(v: number) => fc(v)} contentStyle={tooltipStyle} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <Bar dataKey="real" name="Ingresos $" radius={[3, 3, 0, 0]}>
+                          {incomeForecast.map((e, i) => <Cell key={i} fill={e.type === 'forecast' ? '#C9A84C' : '#1A4A28'} opacity={e.type === 'forecast' ? 0.6 : 0.8} />)}
+                        </Bar>
+                        <Line type="monotone" dataKey="budget" stroke="#F59E0B" strokeWidth={1.5} strokeDasharray="5 5" dot={false} name="Meta $" />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  ) : <p className="text-sm text-gray-400 text-center py-12">Se requieren al menos 2 meses de datos.</p>}
+                  <p className="text-[9px] text-gray-400 text-center mt-1">Barras doradas = pronóstico basado en SMA-3 con drift de crecimiento</p>
+                </CardContent>
+              </Card>
+
+              {/* P2: Income Volatility */}
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><TrendingDown className="w-4 h-4 text-red-500" />Volatilidad de Ingresos</CardTitle></CardHeader>
+                <CardContent>
+                  {incomeVolatility.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={280}>
+                      <ComposedChart data={incomeVolatility}>
+                        <defs>
+                          <linearGradient id="ingVolGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#8B5CF6" stopOpacity={0.2} /><stop offset="95%" stopColor="#8B5CF6" stopOpacity={0} /></linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="label" stroke="#9ca3af" fontSize={9} />
+                        <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => fcc(v)} />
+                        <Tooltip formatter={(v: number) => fc(v)} contentStyle={tooltipStyle} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="4 4" />
+                        <Area type="monotone" dataKey="deviation" stroke="#8B5CF6" strokeWidth={1.5} fill="url(#ingVolGrad)" name="Desviación $" />
+                        <Line type="monotone" dataKey="real" stroke="#1A4A28" strokeWidth={2} dot={{ r: 2 }} name="Ingreso Real $" />
+                        <Line type="monotone" dataKey="mean" stroke="#C9A84C" strokeWidth={1.5} strokeDasharray="5 5" dot={false} name="Media $" />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  ) : <p className="text-sm text-gray-400 text-center py-12">Se requieren al menos 2 meses.</p>}
+                  <p className="text-[9px] text-gray-400 text-center mt-1">Alta volatilidad = ingresos impredecibles, riesgo para planificación de tesorería</p>
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* P3: CxC Recovery Projection */}
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><ShieldCheck className="w-4 h-4 text-[#1A4A28]" />Proyección de Recuperación CxC</CardTitle></CardHeader>
+                <CardContent>
+                  {cxcRecovery.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={280}>
+                      <ComposedChart data={cxcRecovery}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="label" stroke="#9ca3af" fontSize={9} />
+                        <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => fcc(v)} />
+                        <Tooltip formatter={(v: number) => fc(v)} contentStyle={tooltipStyle} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <Bar dataKey="expected" stackId="a" fill="#4CAF50" name="Recuperación Esperada $" />
+                        <Bar dataKey="atRisk" stackId="a" fill="#F44336" name="En Riesgo $" radius={[3, 3, 0, 0]} />
+                        <Line type="monotone" dataKey="pending" stroke="#C9A84C" strokeWidth={2} dot={{ r: 3 }} name="Total Pendiente $" />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  ) : <p className="text-sm text-gray-400 text-center py-12">Sin datos de CxC para proyección.</p>}
+                  <p className="text-[9px] text-gray-400 text-center mt-1">Probabilidad de recuperación basada en días de mora: 0-30d=90%, 31-60d=70%, 60d+=riesgo</p>
+                </CardContent>
+              </Card>
+
+              {/* P4: Client Risk Score */}
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><AlertTriangle className="w-4 h-4 text-orange-500" />Score de Riesgo por Cliente</CardTitle></CardHeader>
+                <CardContent>
+                  {clientRisk.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={280}>
+                      <BarChart data={clientRisk} layout="vertical" margin={{ left: 10 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis type="number" stroke="#9ca3af" fontSize={10} tickFormatter={v => fcc(v)} />
+                        <YAxis type="category" dataKey="name" stroke="#9ca3af" fontSize={8} width={120} />
+                        <Tooltip formatter={(v: number, name: string) => name.includes('Días') ? `${v} días` : fc(v)} contentStyle={tooltipStyle} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <Bar dataKey="riskScore" fill="#F44336" name="Risk Score $" radius={[0, 4, 4, 0]} opacity={0.7} />
+                        <Bar dataKey="amount" fill="#1A4A28" name="Monto $" radius={[0, 4, 4, 0]} opacity={0.5} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : <p className="text-sm text-gray-400 text-center py-12">Sin datos de clientes.</p>}
+                  <p className="text-[9px] text-gray-400 text-center mt-1">Risk Score = Monto × Factor de Mora. Mayor score = mayor riesgo de incobrabilidad</p>
+                </CardContent>
+              </Card>
+            </div>
 
             {/* ── Automated Narrative ──────────────────────────── */}
             <Card className="border-l-4 border-l-[#1A4A28]">

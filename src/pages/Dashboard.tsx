@@ -21,6 +21,7 @@ import {
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend, ComposedChart, Line, Area, ReferenceLine,
+  PieChart, Pie, Cell, AreaChart,
 } from 'recharts';
 
 // ── All formatting for this module is in USD ──────────────────────────────────
@@ -126,6 +127,87 @@ export function Dashboard() {
     cxp.forEach(r => { const b = r.empresa || 'Sin BU'; if (!m[b]) m[b] = { bu: b, ingresos: 0, egresos: 0 }; m[b].egresos += cxpUSD(r); });
     return Object.values(m).map(v => ({ ...v, neto: v.ingresos - v.egresos })).sort((a, b) => b.neto - a.neto);
   }, [cxp, flujo, flujoUSD]);
+
+  // ── Predictive Analytics Data ─────────────────────────────────────────────
+
+  // 1. Cashflow Forecast — 3-month SMA extrapolation
+  const cashflowForecast = useMemo(() => {
+    if (monthlyTrends.length < 2) return [];
+    const hist = monthlyTrends.map(m => ({ ...m, type: 'real' as const }));
+    const window = Math.min(3, hist.length);
+    const lastN = hist.slice(-window);
+    const avgIn = lastN.reduce((s, m) => s + m.ingresos, 0) / window;
+    const avgOut = lastN.reduce((s, m) => s + m.egresos, 0) / window;
+    const lastMonth = hist[hist.length - 1].month;
+    const forecast: typeof hist = [];
+    for (let i = 1; i <= 6; i++) {
+      const d = new Date(lastMonth + '-01');
+      d.setMonth(d.getMonth() + i);
+      const mo = d.toISOString().slice(0, 7);
+      const drift = 1 + (i * 0.01); // slight growth assumption
+      forecast.push({
+        month: mo, label: formatMonthYear(mo + '-01'),
+        ingresos: avgIn * drift, egresos: avgOut * (1 + i * 0.005),
+        neto: avgIn * drift - avgOut * (1 + i * 0.005), type: 'forecast' as const,
+      });
+    }
+    return [...hist, ...forecast];
+  }, [monthlyTrends]);
+
+  // 2. CxP Concentration — Top providers Pareto
+  const cxpConcentration = useMemo(() => {
+    const m: Record<string, number> = {};
+    cxp.forEach(r => { m[r.proveedor || 'Desconocido'] = (m[r.proveedor || 'Desconocido'] || 0) + cxpUSD(r); });
+    const sorted = Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 8);
+    let cum = 0;
+    return sorted.map(([name, value]) => {
+      cum += value;
+      return { name: name.length > 18 ? name.slice(0, 15) + '...' : name, value, cumPct: totalCxP > 0 ? (cum / totalCxP) * 100 : 0 };
+    });
+  }, [cxp, totalCxP]);
+
+  // 3. Liquidity Runway — projected balance with risk zones
+  const runwayProjection = useMemo(() => {
+    if (projChart.length === 0) return [];
+    return projChart.map(p => ({
+      ...p,
+      riskZone: p.balance < 0 ? p.balance : 0,
+      safeZone: p.balance >= 0 ? p.balance : 0,
+      criticalLine: 0,
+    }));
+  }, [projChart]);
+
+  // 4. Debt Maturity Profile — upcoming maturities by month
+  const debtMaturity = useMemo(() => {
+    const m: Record<string, { month: string; label: string; lp: number; cp: number; total: number }> = {};
+    flujo.forEach(r => {
+      const k = (r.vencimiento || r.created_at || '').slice(0, 7);
+      if (!k) return;
+      if (!m[k]) m[k] = { month: k, label: formatMonthYear(k + '-01'), lp: 0, cp: 0, total: 0 };
+      const amt = flujoUSD(r, 'cuota');
+      if (r.tipo === 'Largo Plazo') m[k].lp += amt;
+      else m[k].cp += amt;
+      m[k].total += amt;
+    });
+    return Object.values(m).sort((a, b) => a.month.localeCompare(b.month));
+  }, [flujo, flujoUSD]);
+
+  // 5. CxP Aging Risk Distribution (pie)
+  const agingRisk = useMemo(() => {
+    const buckets = { 'Vigente (0-30d)': 0, 'Atención (31-60d)': 0, 'Riesgo (61-90d)': 0, 'Crítico (90d+)': 0 };
+    const now = new Date();
+    cxp.forEach(r => {
+      if (!r.vencimiento_fecha) return;
+      const days = Math.max(0, (now.getTime() - new Date(r.vencimiento_fecha).getTime()) / 86400000);
+      const amt = cxpUSD(r);
+      if (days <= 30) buckets['Vigente (0-30d)'] += amt;
+      else if (days <= 60) buckets['Atención (31-60d)'] += amt;
+      else if (days <= 90) buckets['Riesgo (61-90d)'] += amt;
+      else buckets['Crítico (90d+)'] += amt;
+    });
+    return Object.entries(buckets).filter(([, v]) => v > 0).map(([name, value]) => ({ name, value }));
+  }, [cxp]);
+  const AGING_PIE_COLORS = ['#22c55e', '#eab308', '#f97316', '#ef4444'];
 
   // ── Language toggle ─────────────────────────────────────────────────────
   const [lang, setLang] = useState<'es' | 'en'>(() => (localStorage.getItem('narrative_lang') as 'es' | 'en') || 'es');
@@ -307,6 +389,145 @@ export function Dashboard() {
                       <Bar dataKey="egresos" fill={ARA_COLORS.red} name="Egresos $" radius={[3, 3, 0, 0]} opacity={0.6} />
                     </BarChart>
                   </ResponsiveContainer>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* ── Predictive Financial Treasury Analytics ─────────────── */}
+            <div className="border-t border-gray-200 pt-6 mt-2">
+              <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+                <Activity className="w-5 h-5 text-[#1A4A28]" />
+                Predictive Financial Treasury Analytics
+              </h2>
+            </div>
+
+            {/* Forecast + Concentration */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Chart 1: Cashflow Forecast */}
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><TrendingUp className="w-4 h-4 text-[#1A4A28]" />Pronóstico Cashflow 6M (SMA)</CardTitle></CardHeader>
+                <CardContent>
+                  {cashflowForecast.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={300}>
+                      <ComposedChart data={cashflowForecast}>
+                        <defs>
+                          <linearGradient id="fcGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#22c55e" stopOpacity={0.15} /><stop offset="95%" stopColor="#22c55e" stopOpacity={0} /></linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="label" stroke="#9ca3af" fontSize={9} />
+                        <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => fmtCompactUSD(v)} />
+                        <Tooltip formatter={(v: number) => fmtUSD(v)} contentStyle={tooltipStyle} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <ReferenceLine y={0} stroke={ARA_COLORS.red} strokeDasharray="4 4" />
+                        <Area type="monotone" dataKey="neto" stroke="#22c55e" strokeWidth={2} fill="url(#fcGrad)" name="Neto $" />
+                        <Bar dataKey="ingresos" fill={ARA_COLORS.primary} name="Ingresos $" radius={[2, 2, 0, 0]} opacity={0.5} />
+                        <Bar dataKey="egresos" fill={ARA_COLORS.red} name="Egresos $" radius={[2, 2, 0, 0]} opacity={0.35} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  ) : <EmptyState text="Se requieren al menos 2 meses de datos para generar pronóstico." />}
+                  <p className="text-[9px] text-gray-400 text-center mt-1">Proyección basada en promedio móvil simple (SMA-3) con drift de crecimiento</p>
+                </CardContent>
+              </Card>
+
+              {/* Chart 2: CxP Concentration Risk — Pareto */}
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><AlertTriangle className="w-4 h-4 text-orange-500" />Riesgo de Concentración CxP — Pareto</CardTitle></CardHeader>
+                <CardContent>
+                  {cxpConcentration.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={300}>
+                      <ComposedChart data={cxpConcentration}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="name" stroke="#9ca3af" fontSize={8} angle={-20} textAnchor="end" height={50} />
+                        <YAxis yAxisId="left" stroke="#9ca3af" fontSize={10} tickFormatter={v => fmtCompactUSD(v)} />
+                        <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" fontSize={10} tickFormatter={v => `${v}%`} domain={[0, 100]} />
+                        <Tooltip formatter={(v: number, name: string) => name.includes('%') ? `${v.toFixed(1)}%` : fmtUSD(v)} contentStyle={tooltipStyle} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <ReferenceLine yAxisId="right" y={80} stroke={ARA_COLORS.red} strokeDasharray="4 4" label={{ value: '80%', position: 'right', fontSize: 9, fill: ARA_COLORS.red }} />
+                        <Bar yAxisId="left" dataKey="value" fill={ARA_COLORS.primary} name="Monto CxP $" radius={[3, 3, 0, 0]} />
+                        <Line yAxisId="right" type="monotone" dataKey="cumPct" stroke={ARA_COLORS.gold} strokeWidth={2.5} dot={{ r: 3 }} name="% Acumulado" />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  ) : <EmptyState text="Sin datos de CxP para análisis de concentración." />}
+                  <p className="text-[9px] text-gray-400 text-center mt-1">Análisis Pareto: identifica proveedores que concentran el mayor riesgo de pago</p>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Runway + Maturity + Aging */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Chart 3: Liquidity Runway */}
+              <Card className="lg:col-span-2">
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><ShieldCheck className="w-4 h-4 text-[#1A4A28]" />Runway de Liquidez — Zonas de Riesgo</CardTitle></CardHeader>
+                <CardContent>
+                  {runwayProjection.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={280}>
+                      <AreaChart data={runwayProjection}>
+                        <defs>
+                          <linearGradient id="safeG" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} /><stop offset="95%" stopColor="#22c55e" stopOpacity={0} /></linearGradient>
+                          <linearGradient id="riskG" x1="0" y1="1" x2="0" y2="0"><stop offset="5%" stopColor="#ef4444" stopOpacity={0.3} /><stop offset="95%" stopColor="#ef4444" stopOpacity={0} /></linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="label" stroke="#9ca3af" fontSize={9} />
+                        <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => fmtCompactUSD(v)} />
+                        <Tooltip formatter={(v: number) => fmtUSD(v)} contentStyle={tooltipStyle} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <ReferenceLine y={0} stroke={ARA_COLORS.red} strokeWidth={2} strokeDasharray="6 3" label={{ value: 'Zona Crítica', fill: ARA_COLORS.red, fontSize: 9 }} />
+                        <Area type="monotone" dataKey="safeZone" stroke="#22c55e" strokeWidth={2} fill="url(#safeG)" name="Balance Positivo $" />
+                        <Area type="monotone" dataKey="riskZone" stroke="#ef4444" strokeWidth={2} fill="url(#riskG)" name="Déficit $" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  ) : <EmptyState text="Sin datos de proyección para runway." />}
+                  <p className="text-[9px] text-gray-400 text-center mt-1">Meses con balance positivo = runway operativo. Zona roja = riesgo de iliquidez.</p>
+                </CardContent>
+              </Card>
+
+              {/* Chart 4: Aging Risk Pie */}
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Clock className="w-4 h-4 text-orange-500" />Distribución Riesgo Aging</CardTitle></CardHeader>
+                <CardContent>
+                  {agingRisk.length > 0 ? (
+                    <>
+                      <ResponsiveContainer width="100%" height={200}>
+                        <PieChart>
+                          <Pie data={agingRisk} cx="50%" cy="50%" innerRadius={40} outerRadius={75} paddingAngle={3} dataKey="value"
+                            label={({ name, percent }) => `${name.split('(')[0].trim()} ${(percent * 100).toFixed(0)}%`} labelLine={false} style={{ fontSize: 8 }}>
+                            {agingRisk.map((_, i) => <Cell key={i} fill={AGING_PIE_COLORS[i % AGING_PIE_COLORS.length]} />)}
+                          </Pie>
+                          <Tooltip formatter={(v: number) => fmtUSD(v)} contentStyle={tooltipStyle} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div className="space-y-1 mt-2">
+                        {agingRisk.map((b, i) => (
+                          <div key={b.name} className="flex items-center justify-between text-[10px]">
+                            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: AGING_PIE_COLORS[i] }} />{b.name}</span>
+                            <span className="font-semibold tabular-nums">{fmtCompactUSD(b.value)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : <EmptyState text="Sin datos de aging." />}
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Chart 5: Debt Maturity Profile */}
+            {debtMaturity.length > 0 && (
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Landmark className="w-4 h-4 text-[#1A4A28]" />Perfil de Vencimiento de Deuda ($)</CardTitle></CardHeader>
+                <CardContent>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <ComposedChart data={debtMaturity}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      <XAxis dataKey="label" stroke="#9ca3af" fontSize={9} />
+                      <YAxis stroke="#9ca3af" fontSize={10} tickFormatter={v => fmtCompactUSD(v)} />
+                      <Tooltip formatter={(v: number) => fmtUSD(v)} contentStyle={tooltipStyle} />
+                      <Legend wrapperStyle={{ fontSize: 10 }} />
+                      <Bar dataKey="lp" stackId="a" fill={ARA_COLORS.primary} name="Largo Plazo $" />
+                      <Bar dataKey="cp" stackId="a" fill={ARA_COLORS.gold} name="Corto Plazo $" radius={[3, 3, 0, 0]} />
+                      <Line type="monotone" dataKey="total" stroke={ARA_COLORS.red} strokeWidth={2} dot={{ r: 3 }} name="Total Cuotas $" />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                  <p className="text-[9px] text-gray-400 text-center mt-1">Perfil de vencimientos: concentración de pagos por mes y tipo de deuda</p>
                 </CardContent>
               </Card>
             )}

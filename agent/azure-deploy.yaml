@@ -1,0 +1,86 @@
+# Azure Container Apps deployment configuration
+# Deploy with: az containerapp up --name treasury-copilot-agent --source ./agent
+# Or build and push Docker image, then deploy:
+#   docker build -t treasury-copilot-agent -f agent/Dockerfile .
+#   az acr login --name <your-acr>
+#   docker tag treasury-copilot-agent <your-acr>.azurecr.io/treasury-copilot-agent:latest
+#   docker push <your-acr>.azurecr.io/treasury-copilot-agent:latest
+#   az containerapp create \
+#     --name treasury-copilot-agent \
+#     --resource-group <rg> \
+#     --environment <env> \
+#     --image <your-acr>.azurecr.io/treasury-copilot-agent:latest \
+#     --target-port 8000 \
+#     --ingress external \
+#     --min-replicas 0 \
+#     --max-replicas 3 \
+#     --cpu 2.0 \
+#     --memory 4Gi \
+#     --env-vars \
+#       OPENROUTER_API_KEY=secretref:openrouter-api-key \
+#       SUPABASE_URL=secretref:supabase-url \
+#       SUPABASE_SERVICE_ROLE_KEY=secretref:supabase-service-role-key \
+#       LANGCHAIN_API_KEY=secretref:langchain-api-key \
+#       TAVILY_API_KEY=secretref:tavily-api-key \
+#       LANGCHAIN_TRACING_V2=true \
+#       LANGCHAIN_PROJECT=aurea-cotizador \
+#       OPENROUTER_MODEL=gpt-oss-120b
+
+properties:
+  managedEnvironmentId: /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.App/managedEnvironments/{env}
+  configuration:
+    ingress:
+      external: true
+      targetPort: 8000
+      transport: http
+      corsPolicy:
+        allowedOrigins: ["*"]
+        allowedMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"]
+        allowedHeaders: ["*"]
+    secrets:
+      - name: openrouter-api-key
+        value: ""
+      - name: supabase-url
+        value: ""
+      - name: supabase-service-role-key
+        value: ""
+      - name: langchain-api-key
+        value: ""
+      - name: tavily-api-key
+        value: ""
+  template:
+    containers:
+      - name: treasury-copilot-agent
+        image: treasury-copilot-agent:latest
+        resources:
+          cpu: 2.0
+          memory: 4Gi
+        env:
+          - name: OPENROUTER_API_KEY
+            secretRef: openrouter-api-key
+          - name: SUPABASE_URL
+            secretRef: supabase-url
+          - name: SUPABASE_SERVICE_ROLE_KEY
+            secretRef: supabase-service-role-key
+          - name: LANGCHAIN_API_KEY
+            secretRef: langchain-api-key
+          - name: TAVILY_API_KEY
+            secretRef: tavily-api-key
+          - name: LANGCHAIN_TRACING_V2
+            value: "true"
+          - name: LANGCHAIN_PROJECT
+            value: "aurea-cotizador"
+          - name: LANGCHAIN_ENDPOINT
+            value: "https://api.smith.langchain.com"
+          - name: OPENROUTER_MODEL
+            value: "gpt-oss-120b"
+          - name: FAISS_INDEX_DIR
+            value: "/tmp/treasury_faiss_index"
+    scale:
+      minReplicas: 0
+      maxReplicas: 3
+      rules:
+        - name: http-rule
+          http:
+            metadata:
+              concurrentRequests: "10"

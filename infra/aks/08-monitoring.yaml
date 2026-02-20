@@ -1,0 +1,119 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Monitoring — Kafka & CDC health checks, Prometheus ServiceMonitor
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── PodMonitor for Kafka brokers (Strimzi exposes JMX metrics) ─────────────
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: kafka-broker-metrics
+  namespace: kafka
+  labels:
+    app.kubernetes.io/part-of: treasury-copilot
+spec:
+  selector:
+    matchLabels:
+      strimzi.io/kind: Kafka
+      strimzi.io/name: treasury-kafka-kafka
+  podMetricsEndpoints:
+    - path: /metrics
+      port: tcp-prometheus
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: kafka_broker
+---
+# ── CDC Producer health check CronJob ──────────────────────────────────────
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cdc-health-check
+  namespace: treasury-cdc
+  labels:
+    app.kubernetes.io/name: cdc-health-check
+    app.kubernetes.io/part-of: treasury-copilot
+spec:
+  schedule: "*/10 * * * *"          # Every 10 minutes
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 60
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: health-check
+              image: cr6uluhllxv7asm.azurecr.io/cdc-producer:latest
+              command: ["python", "-c"]
+              args:
+                - |
+                  import sys, json
+                  # Check PcGraf connectivity
+                  try:
+                      import pymssql
+                      conn = pymssql.connect(
+                          server='192.168.1.3', user='vflores',
+                          password='9547Fl0r3$', database='siawin0'
+                      )
+                      conn.cursor().execute('SELECT 1')
+                      conn.close()
+                      print('PcGraf: OK')
+                  except Exception as e:
+                      print(f'PcGraf: FAIL - {e}')
+                      sys.exit(1)
+                  # Check Kafka connectivity
+                  try:
+                      from kafka import KafkaProducer
+                      p = KafkaProducer(
+                          bootstrap_servers='treasury-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092',
+                          max_block_ms=5000
+                      )
+                      p.close()
+                      print('Kafka: OK')
+                  except Exception as e:
+                      print(f'Kafka: FAIL - {e}')
+                      sys.exit(1)
+                  print('All checks passed')
+              resources:
+                requests:
+                  memory: 128Mi
+                  cpu: 100m
+                limits:
+                  memory: 256Mi
+                  cpu: 250m
+              envFrom:
+                - secretRef:
+                    name: pcgraf-credentials
+                - configMapRef:
+                    name: cdc-config
+---
+# ── NetworkPolicy — restrict Kafka access to CDC namespace only ────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kafka-access-policy
+  namespace: kafka
+spec:
+  podSelector:
+    matchLabels:
+      strimzi.io/kind: Kafka
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow from kafka namespace (inter-broker)
+    - from:
+        - podSelector: {}
+    # Allow from treasury-cdc namespace (CDC producer/consumer)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: treasury-cdc
+      ports:
+        - protocol: TCP
+          port: 9092
+        - protocol: TCP
+          port: 9093
+        - protocol: TCP
+          port: 9094
