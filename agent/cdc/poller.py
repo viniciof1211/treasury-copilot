@@ -26,6 +26,9 @@ from .config import (
     BATCH_SIZE, MAX_ROWS_PER_TABLE, CDC_TABLES,
 )
 
+import os
+SUPABASE_SCHEMA = os.environ.get("CDC_SUPABASE_SCHEMA", "public")
+
 logger = logging.getLogger("cdc.poller")
 
 
@@ -84,9 +87,10 @@ class CDCPoller:
             "Authorization": f"Bearer {SUPABASE_KEY}",
             "apikey": SUPABASE_KEY,
             "Prefer": "return=minimal",
-            "Accept-Profile": "tms",
-            "Content-Profile": "tms",
         }
+        if SUPABASE_SCHEMA != "public":
+            self._supabase_headers["Accept-Profile"] = SUPABASE_SCHEMA
+            self._supabase_headers["Content-Profile"] = SUPABASE_SCHEMA
 
     def _connect_pcgraf(self) -> pymssql.Connection:
         return pymssql.connect(

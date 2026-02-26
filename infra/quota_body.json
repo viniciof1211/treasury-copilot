@@ -1,0 +1,12 @@
+{
+  "properties": {
+    "limit": {
+      "limitObjectType": "LimitValue",
+      "value": 20
+    },
+    "resourceType": "dedicated",
+    "name": {
+      "value": "standardDSv3Family"
+    }
+  }
+}

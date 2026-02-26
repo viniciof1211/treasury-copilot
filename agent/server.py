@@ -40,6 +40,11 @@ from agent.knowledge_base import (
     get_sync_stats,
 )
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from agent.projects_api import (
+    projects_kpis, projects_portfolio, projects_contracts, projects_alerts,
+    projects_gantt, projects_area_breakdown, projects_collections,
+    projects_forecast, projects_aging, projects_curation_save,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -1357,6 +1362,17 @@ routes = [
     Route("/data-model/kafka", kafka_status, methods=["GET"]),
     Route("/data-model/erp-schema", erp_schema, methods=["GET"]),
     Route("/data-model/curation", data_curation_save, methods=["POST"]),
+    # Projects & Contracts BI
+    Route("/projects/kpis", projects_kpis, methods=["GET"]),
+    Route("/projects/portfolio", projects_portfolio, methods=["GET"]),
+    Route("/projects/contracts", projects_contracts, methods=["GET"]),
+    Route("/projects/alerts", projects_alerts, methods=["GET"]),
+    Route("/projects/gantt", projects_gantt, methods=["GET"]),
+    Route("/projects/areas", projects_area_breakdown, methods=["GET"]),
+    Route("/projects/collections", projects_collections, methods=["GET"]),
+    Route("/projects/forecast", projects_forecast, methods=["GET"]),
+    Route("/projects/aging", projects_aging, methods=["GET"]),
+    Route("/projects/curation", projects_curation_save, methods=["POST"]),
 ]
 
 # Mount static assets (JS/CSS/images) if STATIC_DIR exists

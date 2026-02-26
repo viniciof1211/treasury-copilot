@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# Kafka Cluster — 3 brokers, RF=3, KRaft mode (no ZooKeeper)
+# Kafka Cluster — 9 brokers, RF=3, KRaft mode (no ZooKeeper)
 # Strimzi 0.50.x + Kafka 4.0.0
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -43,7 +43,7 @@ metadata:
   labels:
     strimzi.io/cluster: treasury-kafka
 spec:
-  replicas: 3
+  replicas: 9
   roles:
     - broker
   storage:
@@ -117,8 +117,8 @@ spec:
       transaction.state.log.min.isr: 2
 
       # ── Performance ──────────────────────────────────────────────────
-      num.partitions: 3
-      num.network.threads: 3
+      num.partitions: 9
+      num.network.threads: 4
       num.io.threads: 8
 
       # ── Log retention (CDC events) ──────────────────────────────────

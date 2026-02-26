@@ -1,6 +1,6 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # Kafka Topics — one per siawin0 CDC-tracked table
-# All topics: 5 partitions, replication factor 5, 7-day retention
+# All topics: 9 partitions, replication factor 3, 7-day retention
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── Inventario Module ──────────────────────────────────────────────────────
@@ -15,7 +15,7 @@ metadata:
     entity: productos
 spec:
   topicName: siawin0.IN04
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -34,7 +34,7 @@ metadata:
     entity: movimientos-inventario
 spec:
   topicName: siawin0.IN11
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -53,7 +53,7 @@ metadata:
     entity: proveedores
 spec:
   topicName: siawin0.IN13
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -72,7 +72,7 @@ metadata:
     entity: inventario-bodega
 spec:
   topicName: siawin0.IN14
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -91,7 +91,7 @@ metadata:
     entity: kardex
 spec:
   topicName: siawin0.IN16
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -110,7 +110,7 @@ metadata:
     entity: transacciones-inv
 spec:
   topicName: siawin0.IN34
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -129,7 +129,7 @@ metadata:
     entity: ordenes-compra-inv
 spec:
   topicName: siawin0.IN42
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -148,7 +148,7 @@ metadata:
     entity: bodegas
 spec:
   topicName: siawin0.IN64
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -167,7 +167,7 @@ metadata:
     entity: historico-costos
 spec:
   topicName: siawin0.IN97
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -187,7 +187,7 @@ metadata:
     entity: lineas-factura
 spec:
   topicName: siawin0.FA01
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -206,7 +206,7 @@ metadata:
     entity: facturas
 spec:
   topicName: siawin0.FA12
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -225,7 +225,7 @@ metadata:
     entity: clientes
 spec:
   topicName: siawin0.FA20
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -244,7 +244,7 @@ metadata:
     entity: recibos-caja
 spec:
   topicName: siawin0.FA25
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -264,7 +264,7 @@ metadata:
     entity: ordenes-compra
 spec:
   topicName: siawin0.CP10
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -283,7 +283,7 @@ metadata:
     entity: lineas-oc
 spec:
   topicName: siawin0.CP11
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -302,7 +302,7 @@ metadata:
     entity: recepciones-compra
 spec:
   topicName: siawin0.CP12
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -321,7 +321,7 @@ metadata:
     entity: cuentas-por-pagar
 spec:
   topicName: siawin0.CP21
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -340,7 +340,7 @@ metadata:
     entity: pagos-proveedores
 spec:
   topicName: siawin0.CP31
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -360,7 +360,7 @@ metadata:
     entity: cuentas-por-cobrar
 spec:
   topicName: siawin0.CC10
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -380,7 +380,7 @@ metadata:
     entity: plan-cuentas
 spec:
   topicName: siawin0.CO00
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -400,7 +400,7 @@ metadata:
     entity: movimientos-bancarios
 spec:
   topicName: siawin0.BA10
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -420,7 +420,7 @@ metadata:
     entity: tipos-cambio
 spec:
   topicName: siawin0.TC
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -439,7 +439,7 @@ metadata:
     entity: catalogos-generales
 spec:
   topicName: siawin0.GE01
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "604800000"
@@ -459,7 +459,7 @@ metadata:
     entity: dead-letter-queue
 spec:
   topicName: siawin0.DLQ
-  partitions: 3
+  partitions: 9
   replicas: 3
   config:
     retention.ms: "2592000000"
