@@ -1981,3 +1981,256 @@ async def admin_cdc_status(request: Request) -> JSONResponse:
     except Exception as e:
         logger.error(f"admin_cdc_status error: {e}")
         return _err(str(e), 500)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 5: Optimization — Bank API, E-Invoice, PcGraf Write-back
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── Bank API Integration ─────────────────────────────────────────────────
+
+async def bank_accounts_list(request: Request) -> JSONResponse:
+    """List configured bank accounts with balances (stub for bank API integration)."""
+    ctx = _user_ctx(request)
+    try:
+        check_permission(ctx["user_role"], "cash", "read")
+    except AuthorizationError as e:
+        return _err(str(e), 403)
+    try:
+        # Query bank accounts from movimientos_bancarios for available accounts
+        resp = await _http.get(
+            f"{_sb_url}/rest/v1/silver_finance.flujo_semanal?select=empresa,concepto&limit=1",
+            headers=_sb_headers(),
+        )
+        # Stub: In production, this would call actual bank APIs (BAC, BCR, BN, etc.)
+        accounts = [
+            {
+                "bank": "BAC San José",
+                "account_number": "****4521",
+                "currency": "CRC",
+                "type": "corriente",
+                "balance": None,
+                "last_sync": None,
+                "status": "configured",
+                "api_type": "sftp_mt940",
+            },
+            {
+                "bank": "Banco Nacional",
+                "account_number": "****7890",
+                "currency": "CRC",
+                "type": "corriente",
+                "balance": None,
+                "last_sync": None,
+                "status": "configured",
+                "api_type": "sinpe_api",
+            },
+            {
+                "bank": "BCR",
+                "account_number": "****3456",
+                "currency": "USD",
+                "type": "corriente",
+                "balance": None,
+                "last_sync": None,
+                "status": "pending_setup",
+                "api_type": "web_scraping",
+            },
+        ]
+        return JSONResponse({
+            "accounts": accounts,
+            "total": len(accounts),
+            "note": "Bank API integration pending — balances will be fetched once API credentials are configured.",
+        })
+    except Exception as e:
+        logger.error(f"bank_accounts_list error: {e}")
+        return _err(str(e), 500)
+
+
+async def bank_statement_import(request: Request) -> JSONResponse:
+    """Import a bank statement (stub — accepts MT940/CSV metadata, returns processing status)."""
+    ctx = _user_ctx(request)
+    try:
+        check_permission(ctx["user_role"], "recon", "write")
+    except AuthorizationError as e:
+        return _err(str(e), 403)
+    try:
+        body = await request.json()
+        bank = body.get("bank", "unknown")
+        format_type = body.get("format", "mt940")
+        # Stub: In production, this would parse MT940/CSV and insert into bank_statement_lines
+        return JSONResponse({
+            "status": "accepted",
+            "bank": bank,
+            "format": format_type,
+            "message": f"Statement import for {bank} ({format_type}) queued for processing.",
+            "job_id": f"import-{bank}-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            "note": "Full MT940/CSV parsing will be available when bank API integration is complete.",
+        })
+    except Exception as e:
+        logger.error(f"bank_statement_import error: {e}")
+        return _err(str(e), 500)
+
+
+async def bank_payment_initiate(request: Request) -> JSONResponse:
+    """Initiate a payment via bank API (stub — SINPE/wire transfer)."""
+    ctx = _user_ctx(request)
+    try:
+        check_permission(ctx["user_role"], "cxp", "write")
+    except AuthorizationError as e:
+        return _err(str(e), 403)
+    try:
+        body = await request.json()
+        payment_type = body.get("type", "sinpe")  # sinpe | wire | ach
+        amount = body.get("amount", 0)
+        currency = body.get("currency", "CRC")
+        beneficiary = body.get("beneficiary", "")
+        # Stub: In production, this would call the bank's payment API
+        return JSONResponse({
+            "status": "pending_approval",
+            "payment_type": payment_type,
+            "amount": amount,
+            "currency": currency,
+            "beneficiary": beneficiary,
+            "reference": f"PAY-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            "message": "Payment initiated — requires dual approval before bank submission.",
+            "note": "Bank payment API integration pending — this is a stub response.",
+        })
+    except Exception as e:
+        logger.error(f"bank_payment_initiate error: {e}")
+        return _err(str(e), 500)
+
+
+# ── Almamater E-Invoice Integration ──────────────────────────────────────
+
+async def einvoice_status(request: Request) -> JSONResponse:
+    """Get e-invoice submission status for recent invoices."""
+    ctx = _user_ctx(request)
+    try:
+        check_permission(ctx["user_role"], "invoicing", "read")
+    except AuthorizationError as e:
+        return _err(str(e), 403)
+    try:
+        # Fetch recent facturas from Supabase
+        resp = await _http.get(
+            f"{_sb_url}/rest/v1/silver_finance.facturas?select=numero_factura,cliente,total,fecha,empresa&order=fecha.desc&limit=20",
+            headers=_sb_headers(),
+        )
+        rows = resp.json() if resp.status_code == 200 else []
+        # Stub: In production, each invoice would have an Almamater submission status
+        invoices = []
+        for r in rows:
+            num = str(r.get("numero_factura", ""))
+            invoices.append({
+                "numero_factura": num,
+                "cliente": r.get("cliente", ""),
+                "total": _to_float(r.get("total", 0)),
+                "fecha": r.get("fecha", ""),
+                "empresa": r.get("empresa", ""),
+                "einvoice_status": "accepted" if num.endswith(("0", "2", "4", "6", "8")) else "pending",
+                "hacienda_key": f"CR-{num[-8:]}" if len(num) > 8 else None,
+                "almamater_ref": f"ALM-{num[-6:]}" if len(num) > 6 else None,
+            })
+        return JSONResponse({
+            "invoices": invoices,
+            "total": len(invoices),
+            "accepted": sum(1 for i in invoices if i["einvoice_status"] == "accepted"),
+            "pending": sum(1 for i in invoices if i["einvoice_status"] == "pending"),
+            "note": "Almamater integration stub — status is simulated. Full webhook integration pending.",
+        })
+    except Exception as e:
+        logger.error(f"einvoice_status error: {e}")
+        return _err(str(e), 500)
+
+
+async def einvoice_submit(request: Request) -> JSONResponse:
+    """Submit an invoice to Almamater for e-invoice processing (stub)."""
+    ctx = _user_ctx(request)
+    try:
+        check_permission(ctx["user_role"], "invoicing", "write")
+    except AuthorizationError as e:
+        return _err(str(e), 403)
+    try:
+        body = await request.json()
+        numero_factura = body.get("numero_factura", "")
+        return JSONResponse({
+            "status": "queued",
+            "numero_factura": numero_factura,
+            "almamater_ref": f"ALM-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            "message": f"Invoice {numero_factura} queued for Almamater submission.",
+            "flow": "Proforma → FA → Almamater → Hacienda → Accepted/Rejected",
+            "note": "Full Almamater API integration pending — this is a stub response.",
+        })
+    except Exception as e:
+        logger.error(f"einvoice_submit error: {e}")
+        return _err(str(e), 500)
+
+
+async def einvoice_webhook(request: Request) -> JSONResponse:
+    """Receive webhook from Almamater with e-invoice status updates (stub)."""
+    try:
+        body = await request.json()
+        event_type = body.get("event", "unknown")
+        ref = body.get("reference", "")
+        logger.info(f"einvoice_webhook received: event={event_type}, ref={ref}")
+        # Stub: In production, this would update the invoice status in Supabase
+        return JSONResponse({
+            "received": True,
+            "event": event_type,
+            "reference": ref,
+            "message": "Webhook received — invoice status update pending full integration.",
+        })
+    except Exception as e:
+        logger.error(f"einvoice_webhook error: {e}")
+        return _err(str(e), 500)
+
+
+# ── PcGraf Write-back ────────────────────────────────────────────────────
+
+async def pcgraf_writeback_status(request: Request) -> JSONResponse:
+    """Get write-back queue status (what changes in Supabase are pending push to PcGraf)."""
+    ctx = _user_ctx(request)
+    try:
+        check_permission(ctx["user_role"], "admin", "read")
+    except AuthorizationError as e:
+        return _err(str(e), 403)
+    try:
+        # Stub: In production, this would query a write-back queue table
+        # showing curated records that need to be pushed back to PcGraf
+        writeback_entities = [
+            {"entity": "clientes", "pcgraf_table": "FA20", "direction": "supabase→pcgraf", "pending": 0, "status": "idle"},
+            {"entity": "productos", "pcgraf_table": "IN04", "direction": "supabase→pcgraf", "pending": 0, "status": "idle"},
+            {"entity": "proveedores", "pcgraf_table": "IN13", "direction": "supabase→pcgraf", "pending": 0, "status": "idle"},
+            {"entity": "plan_cuentas", "pcgraf_table": "CO00", "direction": "supabase→pcgraf", "pending": 0, "status": "idle"},
+        ]
+        return JSONResponse({
+            "writeback_queue": writeback_entities,
+            "total_pending": 0,
+            "last_push": None,
+            "mode": "disabled",
+            "note": "PcGraf write-back is currently disabled. Enable when bidirectional sync is approved.",
+        })
+    except Exception as e:
+        logger.error(f"pcgraf_writeback_status error: {e}")
+        return _err(str(e), 500)
+
+
+async def pcgraf_writeback_push(request: Request) -> JSONResponse:
+    """Push curated changes back to PcGraf (stub — requires approval)."""
+    ctx = _user_ctx(request)
+    try:
+        check_permission(ctx["user_role"], "admin", "write")
+    except AuthorizationError as e:
+        return _err(str(e), 403)
+    try:
+        body = await request.json()
+        entity = body.get("entity", "")
+        record_ids = body.get("record_ids", [])
+        return JSONResponse({
+            "status": "rejected",
+            "entity": entity,
+            "record_count": len(record_ids),
+            "message": "PcGraf write-back is currently disabled. Enable bidirectional sync in Admin settings.",
+            "note": "Write-back requires VPN connection to PcGraf server (192.168.1.3) and explicit approval.",
+        })
+    except Exception as e:
+        logger.error(f"pcgraf_writeback_push error: {e}")
+        return _err(str(e), 500)

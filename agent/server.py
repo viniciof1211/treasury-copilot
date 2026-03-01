@@ -67,6 +67,9 @@ from agent.tms_core_modules import (
     mrp_dashboard, mrp_reorder_recommendations,
     board_executive_dashboard, board_bu_comparison,
     admin_system_health, admin_cdc_status,
+    bank_accounts_list, bank_statement_import, bank_payment_initiate,
+    einvoice_status, einvoice_submit, einvoice_webhook,
+    pcgraf_writeback_status, pcgraf_writeback_push,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -1434,6 +1437,15 @@ routes = [
     Route("/tms/board/bu-comparison", board_bu_comparison, methods=["GET"]),
     Route("/tms/admin/health", admin_system_health, methods=["GET"]),
     Route("/tms/admin/cdc-status", admin_cdc_status, methods=["GET"]),
+    # ── TMS Phase 5: Optimization — Bank API, E-Invoice, Write-back ──
+    Route("/tms/bank/accounts", bank_accounts_list, methods=["GET"]),
+    Route("/tms/bank/import", bank_statement_import, methods=["POST"]),
+    Route("/tms/bank/pay", bank_payment_initiate, methods=["POST"]),
+    Route("/tms/einvoice/status", einvoice_status, methods=["GET"]),
+    Route("/tms/einvoice/submit", einvoice_submit, methods=["POST"]),
+    Route("/tms/einvoice/webhook", einvoice_webhook, methods=["POST"]),
+    Route("/tms/writeback/status", pcgraf_writeback_status, methods=["GET"]),
+    Route("/tms/writeback/push", pcgraf_writeback_push, methods=["POST"]),
     # ── TMS Engine: Data Virtualization Layer + Transactional CRUD ──
     Route("/tms/entities", tms_list_entities, methods=["GET"]),
     Route("/tms/audit", tms_audit_log, methods=["GET"]),

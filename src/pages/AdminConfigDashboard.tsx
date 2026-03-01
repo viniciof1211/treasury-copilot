@@ -6,7 +6,9 @@ import { Button } from '../components/ui/Button';
 import { formatDate, ARA_COLORS } from '../lib/utils';
 import {
   fetchAdminHealth, fetchCdcStatus,
+  fetchBankAccounts, fetchEInvoiceStatus, fetchWritebackStatus,
   type AdminHealthData, type CdcStatusItem,
+  type BankAccount, type EInvoiceItem, type WritebackEntity,
 } from '../lib/tms-api';
 import {
   Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -14,7 +16,7 @@ import {
 } from 'recharts';
 import {
   Settings, Database, Activity, Shield,
-  RefreshCw, Server, Bell,
+  RefreshCw, Server, Bell, Plug, Landmark, FileCheck, ArrowLeftRight,
 } from 'lucide-react';
 
 const tooltipStyle = { backgroundColor: 'white', border: '1px solid #e5e7eb', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', fontSize: '12px' };
@@ -24,18 +26,31 @@ export function AdminConfigDashboard() {
   const [cdcStatus, setCdcStatus] = useState<CdcStatusItem[]>([]);
   const [cdcCheckedAt, setCdcCheckedAt] = useState('');
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'health' | 'cdc' | 'rbac'>('health');
+  const [activeTab, setActiveTab] = useState<'health' | 'cdc' | 'rbac' | 'integrations'>('health');
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [einvoices, setEinvoices] = useState<EInvoiceItem[]>([]);
+  const [einvoiceStats, setEinvoiceStats] = useState<{ accepted: number; pending: number }>({ accepted: 0, pending: 0 });
+  const [writeback, setWriteback] = useState<WritebackEntity[]>([]);
+  const [writebackMode, setWritebackMode] = useState('disabled');
 
   const load = async () => {
     setLoading(true);
     try {
-      const [healthRes, cdcRes] = await Promise.all([
-        fetchAdminHealth(),
-        fetchCdcStatus(),
+      const [healthRes, cdcRes, bankRes, einvRes, wbRes] = await Promise.all([
+        fetchAdminHealth().catch(() => null),
+        fetchCdcStatus().catch(() => ({ cdc_status: [], checked_at: '' })),
+        fetchBankAccounts().catch(() => ({ accounts: [], total: 0, note: '' })),
+        fetchEInvoiceStatus().catch(() => ({ invoices: [], total: 0, accepted: 0, pending: 0, note: '' })),
+        fetchWritebackStatus().catch(() => ({ writeback_queue: [], total_pending: 0, last_push: null, mode: 'disabled', note: '' })),
       ]);
-      setHealth(healthRes);
+      if (healthRes) setHealth(healthRes);
       setCdcStatus(cdcRes.cdc_status || []);
       setCdcCheckedAt(cdcRes.checked_at || '');
+      setBankAccounts(bankRes.accounts || []);
+      setEinvoices(einvRes.invoices || []);
+      setEinvoiceStats({ accepted: einvRes.accepted || 0, pending: einvRes.pending || 0 });
+      setWriteback(wbRes.writeback_queue || []);
+      setWritebackMode(wbRes.mode || 'disabled');
     } catch (e) { console.error(e); }
     setLoading(false);
   };
@@ -79,6 +94,7 @@ export function AdminConfigDashboard() {
             { id: 'health' as const, label: 'System Health', icon: Activity },
             { id: 'cdc' as const, label: 'CDC Monitor', icon: Database },
             { id: 'rbac' as const, label: 'RBAC & Audit', icon: Shield },
+            { id: 'integrations' as const, label: 'Integraciones', icon: Plug },
           ]).map(t => {
             const Icon = t.icon;
             return (
@@ -205,6 +221,123 @@ export function AdminConfigDashboard() {
                     </tbody>
                   </table>
                 </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {activeTab === 'integrations' && (
+          <div className="space-y-6">
+            {/* Bank API */}
+            <Card>
+              <CardHeader><CardTitle className="text-base flex items-center gap-2"><Landmark className="w-4 h-4" />Bank API — Cuentas Bancarias</CardTitle></CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        {['Banco', 'Cuenta', 'Moneda', 'Tipo', 'Saldo', 'Último Sync', 'Estado', 'API'].map(h => (
+                          <th key={h} className="text-left py-2 px-3 text-xs font-semibold text-gray-500">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bankAccounts.length === 0 ? (
+                        <tr><td colSpan={8} className="py-6 text-center text-gray-400">Sin cuentas configuradas</td></tr>
+                      ) : bankAccounts.map(a => (
+                        <tr key={a.account_number} className="border-b border-gray-100 hover:bg-gray-50">
+                          <td className="py-2 px-3 font-medium">{a.bank}</td>
+                          <td className="py-2 px-3 font-mono text-xs">{a.account_number}</td>
+                          <td className="py-2 px-3">{a.currency}</td>
+                          <td className="py-2 px-3 text-gray-500">{a.type}</td>
+                          <td className="py-2 px-3">{a.balance != null ? `$${a.balance.toLocaleString()}` : <span className="text-gray-300">—</span>}</td>
+                          <td className="py-2 px-3 text-gray-400 text-xs">{a.last_sync || '—'}</td>
+                          <td className="py-2 px-3"><Badge variant={a.status === 'configured' ? 'success' : 'warning'}>{a.status}</Badge></td>
+                          <td className="py-2 px-3 text-xs text-gray-500">{a.api_type}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* E-Invoice */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <FileCheck className="w-4 h-4" />Almamater E-Invoice
+                  <Badge variant="success" className="ml-2">{einvoiceStats.accepted} aceptadas</Badge>
+                  <Badge variant="warning">{einvoiceStats.pending} pendientes</Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        {['# Factura', 'Cliente', 'Total', 'Fecha', 'Empresa', 'Estado', 'Hacienda', 'Almamater'].map(h => (
+                          <th key={h} className="text-left py-2 px-3 text-xs font-semibold text-gray-500">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {einvoices.length === 0 ? (
+                        <tr><td colSpan={8} className="py-6 text-center text-gray-400">Sin facturas electrónicas</td></tr>
+                      ) : einvoices.map(inv => (
+                        <tr key={inv.numero_factura} className="border-b border-gray-100 hover:bg-gray-50">
+                          <td className="py-2 px-3 font-mono text-xs">{inv.numero_factura}</td>
+                          <td className="py-2 px-3 max-w-[150px] truncate">{inv.cliente}</td>
+                          <td className="py-2 px-3 font-semibold">${inv.total.toLocaleString()}</td>
+                          <td className="py-2 px-3 text-gray-500 text-xs">{inv.fecha}</td>
+                          <td className="py-2 px-3 text-xs">{inv.empresa}</td>
+                          <td className="py-2 px-3"><Badge variant={inv.einvoice_status === 'accepted' ? 'success' : 'warning'}>{inv.einvoice_status}</Badge></td>
+                          <td className="py-2 px-3 font-mono text-[10px] text-gray-400">{inv.hacienda_key || '—'}</td>
+                          <td className="py-2 px-3 font-mono text-[10px] text-gray-400">{inv.almamater_ref || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* PcGraf Write-back */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <ArrowLeftRight className="w-4 h-4" />PcGraf Write-back
+                  <Badge variant={writebackMode === 'disabled' ? 'default' : 'success'}>{writebackMode}</Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        {['Entidad', 'Tabla PcGraf', 'Dirección', 'Pendientes', 'Estado'].map(h => (
+                          <th key={h} className="text-left py-2 px-3 text-xs font-semibold text-gray-500">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {writeback.length === 0 ? (
+                        <tr><td colSpan={5} className="py-6 text-center text-gray-400">Sin entidades configuradas</td></tr>
+                      ) : writeback.map(wb => (
+                        <tr key={wb.entity} className="border-b border-gray-100 hover:bg-gray-50">
+                          <td className="py-2 px-3 font-medium">{wb.entity}</td>
+                          <td className="py-2 px-3 font-mono text-xs text-gray-500">{wb.pcgraf_table}</td>
+                          <td className="py-2 px-3 text-xs">{wb.direction}</td>
+                          <td className="py-2 px-3">
+                            <span className={wb.pending > 0 ? 'text-amber-600 font-semibold' : 'text-gray-400'}>{wb.pending}</span>
+                          </td>
+                          <td className="py-2 px-3"><Badge variant={wb.status === 'idle' ? 'default' : wb.status === 'syncing' ? 'info' : 'error'}>{wb.status}</Badge></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="mt-3 text-xs text-gray-400">Write-back requiere conexión VPN a PcGraf (192.168.1.3) y aprobación explícita.</p>
               </CardContent>
             </Card>
           </div>

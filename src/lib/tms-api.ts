@@ -779,3 +779,55 @@ export async function fetchAdminHealth(): Promise<AdminHealthData> {
 export async function fetchCdcStatus(): Promise<{ cdc_status: CdcStatusItem[]; checked_at: string }> {
   return api('/tms/admin/cdc-status', { headers: headers('admin') });
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 5: Optimization — Bank API, E-Invoice, PcGraf Write-back
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Bank API Integration ────────────────────────────────────────────────
+
+export interface BankAccount {
+  bank: string; account_number: string; currency: string; type: string;
+  balance: number | null; last_sync: string | null; status: string; api_type: string;
+}
+
+export async function fetchBankAccounts(): Promise<{ accounts: BankAccount[]; total: number; note: string }> {
+  return api('/tms/bank/accounts', { headers: headers('admin') });
+}
+
+export async function importBankStatement(bank: string, format: string): Promise<Record<string, unknown>> {
+  return api('/tms/bank/import', { method: 'POST', headers: headers('admin'), body: JSON.stringify({ bank, format }) });
+}
+
+export async function initiateBankPayment(data: { type: string; amount: number; currency: string; beneficiary: string }): Promise<Record<string, unknown>> {
+  return api('/tms/bank/pay', { method: 'POST', headers: headers('admin'), body: JSON.stringify(data) });
+}
+
+// ── E-Invoice (Almamater) ───────────────────────────────────────────────
+
+export interface EInvoiceItem {
+  numero_factura: string; cliente: string; total: number; fecha: string;
+  empresa: string; einvoice_status: string; hacienda_key: string | null; almamater_ref: string | null;
+}
+
+export async function fetchEInvoiceStatus(): Promise<{ invoices: EInvoiceItem[]; total: number; accepted: number; pending: number; note: string }> {
+  return api('/tms/einvoice/status', { headers: headers('admin') });
+}
+
+export async function submitEInvoice(numero_factura: string): Promise<Record<string, unknown>> {
+  return api('/tms/einvoice/submit', { method: 'POST', headers: headers('admin'), body: JSON.stringify({ numero_factura }) });
+}
+
+// ── PcGraf Write-back ───────────────────────────────────────────────────
+
+export interface WritebackEntity {
+  entity: string; pcgraf_table: string; direction: string; pending: number; status: string;
+}
+
+export async function fetchWritebackStatus(): Promise<{ writeback_queue: WritebackEntity[]; total_pending: number; last_push: string | null; mode: string; note: string }> {
+  return api('/tms/writeback/status', { headers: headers('admin') });
+}
+
+export async function pushWriteback(entity: string, record_ids: string[]): Promise<Record<string, unknown>> {
+  return api('/tms/writeback/push', { method: 'POST', headers: headers('admin'), body: JSON.stringify({ entity, record_ids }) });
+}
