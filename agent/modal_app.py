@@ -543,6 +543,49 @@ def web():
         })
 
     # ------------------------------------------------------------------
+    # Import shared route handlers (Data Model, CDC, PcGraf, TICA, Code Mapping)
+    # ------------------------------------------------------------------
+    from agent.dashboard_routes import (
+        data_model_schema, kafka_status, erp_schema, data_curation_save,
+        cdc_status, cdc_poll_now, cdc_table_registry,
+        pcgraf_query, pcgraf_databases, pcgraf_tables, pcgraf_health,
+        pcgraf_backup, pcgraf_backup_list,
+        tica_health, tica_search_duas, tica_lookup_partida, tica_conciliate,
+        code_mapping_match, code_mapping_save, code_mapping_list,
+    )
+    from agent.projects_api import (
+        projects_kpis, projects_portfolio, projects_contracts, projects_alerts,
+        projects_gantt, projects_area_breakdown, projects_collections,
+        projects_forecast, projects_aging, projects_curation_save,
+    )
+    from agent.erp_modules_api import (
+        erp_facturas, erp_factura_detalle, erp_facturas_por_negocio,
+        erp_facturas_mensual, erp_facturas_kpis, erp_top_clientes,
+        erp_contratos, erp_contrato_detalle, erp_hitos, erp_table_schema,
+    )
+    from agent.tms_engine import (
+        tms_list_entities, tms_query, tms_get_one, tms_create, tms_update,
+        tms_delete, tms_approve, tms_audit_log, tms_notifications,
+        tms_mark_notification_read, tms_business_rules,
+    )
+    from agent.tms_core_modules import (
+        cash_position, cash_forecast, cash_liquidity_gap, cash_scenarios,
+        cxp_dashboard, cxp_payment_schedule,
+        cxc_dashboard, cxc_collection_worklist,
+        invoicing_dashboard, invoicing_contract_detail,
+        project_finance_dashboard, project_budget_vs_actual,
+        fx_dashboard, fx_scenario_sim,
+        debt_dashboard, debt_instrument_detail,
+        recon_dashboard, recon_auto_match,
+        mrp_dashboard, mrp_reorder_recommendations,
+        board_executive_dashboard, board_bu_comparison,
+        admin_system_health, admin_cdc_status,
+        bank_accounts_list, bank_statement_import, bank_payment_initiate,
+        einvoice_status, einvoice_submit, einvoice_webhook,
+        pcgraf_writeback_status, pcgraf_writeback_push,
+    )
+
+    # ------------------------------------------------------------------
     # Starlette App
     # ------------------------------------------------------------------
     routes = [
@@ -563,6 +606,101 @@ def web():
         Route("/sessions/{session_id}/messages", messages_save, methods=["POST"]),
         # Health
         Route("/health", health, methods=["GET"]),
+        # PcGraf ERP SQL Server
+        Route("/pcgraf/query", pcgraf_query, methods=["POST"]),
+        Route("/pcgraf/databases", pcgraf_databases, methods=["GET"]),
+        Route("/pcgraf/tables", pcgraf_tables, methods=["GET"]),
+        Route("/pcgraf/health", pcgraf_health, methods=["GET"]),
+        Route("/pcgraf/backup", pcgraf_backup, methods=["POST"]),
+        Route("/pcgraf/backups", pcgraf_backup_list, methods=["GET"]),
+        # TICA / Aduanas
+        Route("/tica/health", tica_health, methods=["GET"]),
+        Route("/tica/duas", tica_search_duas, methods=["POST"]),
+        Route("/tica/partida", tica_lookup_partida, methods=["GET"]),
+        Route("/tica/conciliate", tica_conciliate, methods=["POST"]),
+        # AI Code Mapping
+        Route("/code-mapping/match", code_mapping_match, methods=["POST"]),
+        Route("/code-mapping/save", code_mapping_save, methods=["POST"]),
+        Route("/code-mapping/list", code_mapping_list, methods=["GET"]),
+        # CDC (Change Data Capture)
+        Route("/cdc/status", cdc_status, methods=["GET"]),
+        Route("/cdc/poll", cdc_poll_now, methods=["POST"]),
+        Route("/cdc/registry", cdc_table_registry, methods=["GET"]),
+        # Data Model Dashboard
+        Route("/data-model/schema", data_model_schema, methods=["GET"]),
+        Route("/data-model/kafka", kafka_status, methods=["GET"]),
+        Route("/data-model/erp-schema", erp_schema, methods=["GET"]),
+        Route("/data-model/curation", data_curation_save, methods=["POST"]),
+        # Projects & Contracts BI
+        Route("/projects/kpis", projects_kpis, methods=["GET"]),
+        Route("/projects/portfolio", projects_portfolio, methods=["GET"]),
+        Route("/projects/contracts", projects_contracts, methods=["GET"]),
+        Route("/projects/alerts", projects_alerts, methods=["GET"]),
+        Route("/projects/gantt", projects_gantt, methods=["GET"]),
+        Route("/projects/areas", projects_area_breakdown, methods=["GET"]),
+        Route("/projects/collections", projects_collections, methods=["GET"]),
+        Route("/projects/forecast", projects_forecast, methods=["GET"]),
+        Route("/projects/aging", projects_aging, methods=["GET"]),
+        Route("/projects/curation", projects_curation_save, methods=["POST"]),
+        # ERP Modules
+        Route("/erp/facturas", erp_facturas, methods=["GET"]),
+        Route("/erp/factura-detalle", erp_factura_detalle, methods=["GET"]),
+        Route("/erp/facturas-negocio", erp_facturas_por_negocio, methods=["GET"]),
+        Route("/erp/facturas-mensual", erp_facturas_mensual, methods=["GET"]),
+        Route("/erp/facturas-kpis", erp_facturas_kpis, methods=["GET"]),
+        Route("/erp/top-clientes", erp_top_clientes, methods=["GET"]),
+        Route("/erp/contratos", erp_contratos, methods=["GET"]),
+        Route("/erp/contrato-detalle", erp_contrato_detalle, methods=["GET"]),
+        Route("/erp/hitos", erp_hitos, methods=["GET"]),
+        Route("/erp/table-schema", erp_table_schema, methods=["GET"]),
+        # TMS Phase 2: Core Module Analytics
+        Route("/tms/cash/position", cash_position, methods=["GET"]),
+        Route("/tms/cash/forecast", cash_forecast, methods=["GET"]),
+        Route("/tms/cash/liquidity-gap", cash_liquidity_gap, methods=["GET"]),
+        Route("/tms/cash/scenarios", cash_scenarios, methods=["GET"]),
+        Route("/tms/cxp/dashboard", cxp_dashboard, methods=["GET"]),
+        Route("/tms/cxp/schedule", cxp_payment_schedule, methods=["GET"]),
+        Route("/tms/cxc/dashboard", cxc_dashboard, methods=["GET"]),
+        Route("/tms/cxc/worklist", cxc_collection_worklist, methods=["GET"]),
+        Route("/tms/invoicing/dashboard", invoicing_dashboard, methods=["GET"]),
+        Route("/tms/invoicing/contract/{id}", invoicing_contract_detail, methods=["GET"]),
+        # TMS Phase 3: Advanced Module Analytics
+        Route("/tms/projects/dashboard", project_finance_dashboard, methods=["GET"]),
+        Route("/tms/projects/budget-vs-actual", project_budget_vs_actual, methods=["GET"]),
+        Route("/tms/fx/dashboard", fx_dashboard, methods=["GET"]),
+        Route("/tms/fx/scenarios", fx_scenario_sim, methods=["GET"]),
+        Route("/tms/debt/dashboard", debt_dashboard, methods=["GET"]),
+        Route("/tms/debt/instrument/{id}", debt_instrument_detail, methods=["GET"]),
+        Route("/tms/recon/dashboard", recon_dashboard, methods=["GET"]),
+        Route("/tms/recon/auto-match", recon_auto_match, methods=["POST"]),
+        # TMS Phase 4: Intelligence & Polish
+        Route("/tms/mrp/dashboard", mrp_dashboard, methods=["GET"]),
+        Route("/tms/mrp/reorder", mrp_reorder_recommendations, methods=["GET"]),
+        Route("/tms/board/executive", board_executive_dashboard, methods=["GET"]),
+        Route("/tms/board/bu-comparison", board_bu_comparison, methods=["GET"]),
+        Route("/tms/admin/health", admin_system_health, methods=["GET"]),
+        Route("/tms/admin/cdc-status", admin_cdc_status, methods=["GET"]),
+        # TMS Phase 5: Optimization
+        Route("/tms/bank/accounts", bank_accounts_list, methods=["GET"]),
+        Route("/tms/bank/import", bank_statement_import, methods=["POST"]),
+        Route("/tms/bank/pay", bank_payment_initiate, methods=["POST"]),
+        Route("/tms/einvoice/status", einvoice_status, methods=["GET"]),
+        Route("/tms/einvoice/submit", einvoice_submit, methods=["POST"]),
+        Route("/tms/einvoice/webhook", einvoice_webhook, methods=["POST"]),
+        Route("/tms/writeback/status", pcgraf_writeback_status, methods=["GET"]),
+        Route("/tms/writeback/push", pcgraf_writeback_push, methods=["POST"]),
+        # TMS Engine: Data Virtualization Layer + Transactional CRUD
+        Route("/tms/entities", tms_list_entities, methods=["GET"]),
+        Route("/tms/audit", tms_audit_log, methods=["GET"]),
+        Route("/tms/rules", tms_business_rules, methods=["GET"]),
+        Route("/tms/notifications", tms_notifications, methods=["GET"]),
+        Route("/tms/notifications/{id}/read", tms_mark_notification_read, methods=["PUT"]),
+        Route("/tms/{entity}/{id}/approve", tms_approve, methods=["POST"]),
+        Route("/tms/{entity}/{id}", tms_get_one, methods=["GET"]),
+        Route("/tms/{entity}/{id}", tms_update, methods=["PUT"]),
+        Route("/tms/{entity}/{id}", tms_delete, methods=["DELETE"]),
+        Route("/tms/{entity}", tms_query, methods=["GET"]),
+        Route("/tms/{entity}", tms_create, methods=["POST"]),
     ]
 
     middleware = [
