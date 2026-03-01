@@ -1582,3 +1582,402 @@ async def recon_auto_match(request: Request) -> JSONResponse:
     except Exception as e:
         logger.error(f"recon_auto_match error: {e}")
         return _err(str(e), 500)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# M9: MRP / PROCUREMENT
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def mrp_dashboard(request: Request) -> JSONResponse:
+    """GET /tms/mrp/dashboard — Inventory KPIs, stockout alerts, ABC summary."""
+    ctx = _user_ctx(request)
+    try:
+        check_permission(ctx["user_role"], "mrp", "read")
+    except AuthorizationError as e:
+        return _err(str(e), 403)
+
+    try:
+        # Pull from silver_finance.mrp_master
+        import httpx
+        async with httpx.AsyncClient(timeout=15) as client:
+            headers_sb = {
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Accept-Profile": "silver_finance",
+            }
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/mrp_master",
+                headers=headers_sb,
+                params={"select": "*", "limit": "5000"},
+            )
+            items = resp.json() if resp.status_code == 200 else []
+
+        total_items = len(items)
+        total_value = 0
+        stockout_alerts = []
+        abc_summary: dict[str, dict] = {"A": {"count": 0, "value": 0}, "B": {"count": 0, "value": 0}, "C": {"count": 0, "value": 0}}
+        by_category: dict[str, dict] = {}
+        reorder_needed = 0
+
+        for item in items:
+            stock = _to_float(item.get("inventario_disponible") or item.get("stock_actual"))
+            costo = _to_float(item.get("costo_unitario") or item.get("precio_unitario"))
+            consumo = _to_float(item.get("consumo_mensual") or item.get("consumo_diario", 0) * 30)
+            lead_time = int(item.get("lead_time_dias") or item.get("lead_time") or 30)
+            punto_reorden = _to_float(item.get("punto_reorden") or item.get("reorder_point"))
+            abc = (item.get("clasificacion_abc") or item.get("abc_class") or "C").upper()
+            categoria = item.get("categoria") or item.get("category") or "Sin categoría"
+
+            value = stock * costo
+            total_value += value
+
+            if abc in abc_summary:
+                abc_summary[abc]["count"] += 1
+                abc_summary[abc]["value"] += value
+
+            if categoria not in by_category:
+                by_category[categoria] = {"categoria": categoria, "items": 0, "value": 0, "stockouts": 0}
+            by_category[categoria]["items"] += 1
+            by_category[categoria]["value"] += value
+
+            # Stockout alert
+            dias_cobertura = stock / max(consumo / 30, 0.001) if consumo > 0 else 999
+            if dias_cobertura < lead_time or (punto_reorden > 0 and stock < punto_reorden):
+                reorder_needed += 1
+                by_category[categoria]["stockouts"] += 1
+                if len(stockout_alerts) < 30:
+                    stockout_alerts.append({
+                        "codigo": item.get("codigo") or item.get("sku") or "",
+                        "descripcion": item.get("descripcion") or item.get("nombre") or "",
+                        "stock": stock,
+                        "punto_reorden": punto_reorden,
+                        "dias_cobertura": round(dias_cobertura, 1),
+                        "lead_time": lead_time,
+                        "consumo_mensual": round(consumo, 2),
+                        "abc": abc,
+                        "categoria": categoria,
+                        "urgency": "critical" if dias_cobertura < lead_time * 0.5 else "warning",
+                    })
+
+        stockout_alerts.sort(key=lambda x: x["dias_cobertura"])
+
+        return JSONResponse({
+            "kpis": {
+                "total_items": total_items,
+                "total_value": round(total_value, 2),
+                "reorder_needed": reorder_needed,
+                "stockout_rate": round(reorder_needed / total_items * 100, 1) if total_items > 0 else 0,
+                "abc_a_count": abc_summary["A"]["count"],
+                "abc_b_count": abc_summary["B"]["count"],
+                "abc_c_count": abc_summary["C"]["count"],
+            },
+            "abc_summary": [{"class": k, "count": v["count"], "value": v["value"]} for k, v in abc_summary.items()],
+            "by_category": sorted(by_category.values(), key=lambda x: x["value"], reverse=True)[:20],
+            "stockout_alerts": stockout_alerts,
+        })
+    except Exception as e:
+        logger.error(f"mrp_dashboard error: {e}")
+        return _err(str(e), 500)
+
+
+async def mrp_reorder_recommendations(request: Request) -> JSONResponse:
+    """GET /tms/mrp/reorder — EOQ-based reorder recommendations."""
+    ctx = _user_ctx(request)
+    try:
+        check_permission(ctx["user_role"], "mrp", "read")
+    except AuthorizationError as e:
+        return _err(str(e), 403)
+
+    try:
+        import httpx
+        import math
+        async with httpx.AsyncClient(timeout=15) as client:
+            headers_sb = {
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Accept-Profile": "silver_finance",
+            }
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/mrp_master",
+                headers=headers_sb,
+                params={"select": "*", "limit": "5000"},
+            )
+            items = resp.json() if resp.status_code == 200 else []
+
+        recommendations = []
+        for item in items:
+            stock = _to_float(item.get("inventario_disponible") or item.get("stock_actual"))
+            costo = _to_float(item.get("costo_unitario") or item.get("precio_unitario"))
+            consumo_m = _to_float(item.get("consumo_mensual") or item.get("consumo_diario", 0) * 30)
+            lead_time = int(item.get("lead_time_dias") or item.get("lead_time") or 30)
+            punto_reorden = _to_float(item.get("punto_reorden") or item.get("reorder_point"))
+
+            if consumo_m <= 0:
+                continue
+
+            consumo_d = consumo_m / 30
+            dias_cobertura = stock / max(consumo_d, 0.001)
+
+            if punto_reorden > 0 and stock >= punto_reorden and dias_cobertura >= lead_time:
+                continue
+
+            # EOQ = sqrt(2 * D * S / H), assume S=50 (ordering cost), H = 20% of unit cost
+            demand_annual = consumo_m * 12
+            ordering_cost = 50
+            holding_cost = max(costo * 0.20, 0.01)
+            eoq = math.sqrt(2 * demand_annual * ordering_cost / holding_cost) if holding_cost > 0 else consumo_m
+
+            # Safety stock (95% SL, Z=1.65)
+            safety_stock = 1.65 * (consumo_m * 0.2) * math.sqrt(lead_time / 30)
+
+            recommendations.append({
+                "codigo": item.get("codigo") or item.get("sku") or "",
+                "descripcion": item.get("descripcion") or item.get("nombre") or "",
+                "stock_actual": stock,
+                "consumo_mensual": round(consumo_m, 2),
+                "lead_time": lead_time,
+                "dias_cobertura": round(dias_cobertura, 1),
+                "eoq": round(eoq, 0),
+                "safety_stock": round(safety_stock, 0),
+                "cantidad_sugerida": round(max(eoq, safety_stock + consumo_d * lead_time - stock), 0),
+                "costo_estimado": round(max(eoq, safety_stock + consumo_d * lead_time - stock) * costo, 2),
+                "abc": (item.get("clasificacion_abc") or item.get("abc_class") or "C").upper(),
+                "proveedor": item.get("proveedor") or item.get("supplier") or "",
+            })
+
+        recommendations.sort(key=lambda x: x["costo_estimado"], reverse=True)
+
+        return JSONResponse({
+            "recommendations": recommendations[:100],
+            "total_items": len(recommendations),
+            "total_investment": round(sum(r["costo_estimado"] for r in recommendations), 2),
+        })
+    except Exception as e:
+        logger.error(f"mrp_reorder error: {e}")
+        return _err(str(e), 500)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# M10: BOARD REPORTING
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def board_executive_dashboard(request: Request) -> JSONResponse:
+    """GET /tms/board/executive — Single-pane executive summary across all modules."""
+    ctx = _user_ctx(request)
+    try:
+        check_permission(ctx["user_role"], "board", "read")
+    except AuthorizationError as e:
+        return _err(str(e), 403)
+
+    try:
+        # Fetch key data from multiple modules in parallel-ish fashion
+        cashflow = await _supabase.select("tms.cashflow_forecast", filters={"status": "ejecutado"}, order="semana_inicio.desc", limit=200)
+        contratos = await _supabase.select("tms.contratos", filters={"deleted_at": "is.null"}, limit=500)
+        debt = await _supabase.select("tms.debt_instruments", limit=100)
+        batches = await _supabase.select("tms.payment_batches", filters={"deleted_at": "is.null"}, order="fecha_pago.desc", limit=50)
+        fx_rates = await _supabase.select("tms.tipos_cambio", order="fecha.desc", limit=5)
+
+        # Cash summary
+        total_ingresos = sum(_to_float(r.get("ingresos")) for r in cashflow)
+        total_egresos = sum(_to_float(r.get("egresos")) for r in cashflow)
+        flujo_neto = total_ingresos - total_egresos
+
+        # Project summary
+        total_contratado = sum(_to_float(c.get("monto_contrato")) for c in contratos)
+        total_cobrado = sum(_to_float(c.get("monto_cobrado")) for c in contratos)
+        contratos_activos = sum(1 for c in contratos if c.get("estado") in ("firmado", "en_ejecucion"))
+
+        # Debt summary
+        total_debt = sum(_to_float(d.get("capital_vigente", d.get("saldo_original"))) for d in debt)
+        active_loans = sum(1 for d in debt if d.get("estado") in ("vigente", "activo"))
+
+        # CxP summary
+        pending_batches = sum(1 for b in batches if b.get("estado") in ("borrador", "pendiente_aprobacion"))
+        pending_amount = sum(_to_float(b.get("total_monto")) for b in batches if b.get("estado") in ("borrador", "pendiente_aprobacion"))
+
+        # FX
+        latest_rate = fx_rates[0] if fx_rates else {}
+
+        # BU comparison
+        by_bu: dict[str, dict] = {}
+        for r in cashflow:
+            emp = r.get("empresa", "Sin empresa")
+            if emp not in by_bu:
+                by_bu[emp] = {"empresa": emp, "ingresos": 0, "egresos": 0, "flujo_neto": 0}
+            by_bu[emp]["ingresos"] += _to_float(r.get("ingresos"))
+            by_bu[emp]["egresos"] += _to_float(r.get("egresos"))
+            by_bu[emp]["flujo_neto"] += _to_float(r.get("flujo_neto"))
+
+        return JSONResponse({
+            "cash": {
+                "total_ingresos": total_ingresos,
+                "total_egresos": total_egresos,
+                "flujo_neto": flujo_neto,
+            },
+            "projects": {
+                "total_contratado": total_contratado,
+                "total_cobrado": total_cobrado,
+                "contratos_activos": contratos_activos,
+                "total_contratos": len(contratos),
+            },
+            "debt": {
+                "total_capital": total_debt,
+                "active_loans": active_loans,
+            },
+            "cxp": {
+                "pending_batches": pending_batches,
+                "pending_amount": pending_amount,
+            },
+            "fx": {
+                "rate_compra": _to_float(latest_rate.get("compra")),
+                "rate_venta": _to_float(latest_rate.get("venta")),
+                "rate_fecha": latest_rate.get("fecha", ""),
+            },
+            "by_bu": list(by_bu.values()),
+        })
+    except Exception as e:
+        logger.error(f"board_executive error: {e}")
+        return _err(str(e), 500)
+
+
+async def board_bu_comparison(request: Request) -> JSONResponse:
+    """GET /tms/board/bu-comparison — Side-by-side BU performance."""
+    ctx = _user_ctx(request)
+    try:
+        check_permission(ctx["user_role"], "board", "read")
+    except AuthorizationError as e:
+        return _err(str(e), 403)
+
+    try:
+        cashflow = await _supabase.select("tms.cashflow_forecast", limit=1000)
+        contratos = await _supabase.select("tms.contratos", filters={"deleted_at": "is.null"}, limit=1000)
+
+        by_bu: dict[str, dict] = {}
+        for r in cashflow:
+            emp = r.get("empresa", "Sin empresa")
+            if emp not in by_bu:
+                by_bu[emp] = {
+                    "empresa": emp,
+                    "ingresos": 0, "egresos": 0, "flujo_neto": 0,
+                    "contratado": 0, "facturado": 0, "cobrado": 0, "contratos": 0,
+                }
+            by_bu[emp]["ingresos"] += _to_float(r.get("ingresos"))
+            by_bu[emp]["egresos"] += _to_float(r.get("egresos"))
+            by_bu[emp]["flujo_neto"] += _to_float(r.get("flujo_neto"))
+
+        for c in contratos:
+            emp = c.get("empresa", "Sin empresa")
+            if emp not in by_bu:
+                by_bu[emp] = {
+                    "empresa": emp,
+                    "ingresos": 0, "egresos": 0, "flujo_neto": 0,
+                    "contratado": 0, "facturado": 0, "cobrado": 0, "contratos": 0,
+                }
+            by_bu[emp]["contratado"] += _to_float(c.get("monto_contrato"))
+            by_bu[emp]["facturado"] += _to_float(c.get("monto_facturado"))
+            by_bu[emp]["cobrado"] += _to_float(c.get("monto_cobrado"))
+            by_bu[emp]["contratos"] += 1
+
+        return JSONResponse({"business_units": list(by_bu.values())})
+    except Exception as e:
+        logger.error(f"board_bu_comparison error: {e}")
+        return _err(str(e), 500)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# M12: ADMIN & CONFIGURATION
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def admin_system_health(request: Request) -> JSONResponse:
+    """GET /tms/admin/health — System health: entity counts, recent activity."""
+    ctx = _user_ctx(request)
+    try:
+        check_permission(ctx["user_role"], "admin", "read")
+    except AuthorizationError as e:
+        return _err(str(e), 403)
+
+    try:
+        entity_counts: dict[str, int] = {}
+        for entity_name, config in ENTITY_CONFIG.items():
+            try:
+                rows = await _supabase.select(config["table"], limit=1)
+                count_resp = await _supabase.count(config["table"])
+                entity_counts[entity_name] = count_resp
+            except Exception:
+                entity_counts[entity_name] = -1
+
+        # Recent audit log
+        audit = await _supabase.select("tms.audit_log", order="created_at.desc", limit=20)
+
+        # Recent notifications
+        notifs = await _supabase.select("tms.notifications", order="created_at.desc", limit=10)
+
+        # Business rules count
+        rules = await _supabase.select("tms.business_rules", limit=100)
+
+        return JSONResponse({
+            "entity_counts": entity_counts,
+            "total_entities": len(ENTITY_CONFIG),
+            "recent_audit": audit[:10],
+            "recent_notifications": notifs[:5],
+            "business_rules_count": len(rules),
+            "roles": list(ROLE_PERMISSIONS.keys()),
+        })
+    except Exception as e:
+        logger.error(f"admin_system_health error: {e}")
+        return _err(str(e), 500)
+
+
+async def admin_cdc_status(request: Request) -> JSONResponse:
+    """GET /tms/admin/cdc-status — CDC pipeline status from recent sync data."""
+    ctx = _user_ctx(request)
+    try:
+        check_permission(ctx["user_role"], "admin", "read")
+    except AuthorizationError as e:
+        return _err(str(e), 403)
+
+    try:
+        # Check sync timestamps from ERP-synced entities
+        sync_status = []
+        erp_entities = [
+            ("productos", "tms.productos"),
+            ("proveedores", "tms.proveedores"),
+            ("clientes", "tms.clientes"),
+            ("facturas", "tms.facturas"),
+            ("ordenes_compra", "tms.ordenes_compra"),
+            ("cuentas_por_pagar", "tms.cuentas_por_pagar"),
+            ("cuentas_por_cobrar", "tms.cuentas_por_cobrar"),
+            ("movimientos_bancarios", "tms.movimientos_bancarios"),
+            ("tipos_cambio", "tms.tipos_cambio"),
+        ]
+
+        today = datetime.now(timezone.utc)
+
+        for name, table in erp_entities:
+            try:
+                rows = await _supabase.select(table, order="_synced_at.desc", limit=1)
+                if rows:
+                    last_sync = rows[0].get("_synced_at", "")
+                    try:
+                        sync_dt = datetime.fromisoformat(last_sync.replace("Z", "+00:00"))
+                        age_minutes = (today - sync_dt).total_seconds() / 60
+                        status = "fresh" if age_minutes < 10 else "stale" if age_minutes < 60 else "outdated"
+                    except (ValueError, TypeError):
+                        age_minutes = -1
+                        status = "unknown"
+                    sync_status.append({
+                        "entity": name,
+                        "table": table,
+                        "last_sync": last_sync,
+                        "age_minutes": round(age_minutes, 1),
+                        "status": status,
+                    })
+                else:
+                    sync_status.append({"entity": name, "table": table, "last_sync": None, "age_minutes": -1, "status": "empty"})
+            except Exception:
+                sync_status.append({"entity": name, "table": table, "last_sync": None, "age_minutes": -1, "status": "error"})
+
+        return JSONResponse({"cdc_status": sync_status, "checked_at": today.isoformat()})
+    except Exception as e:
+        logger.error(f"admin_cdc_status error: {e}")
+        return _err(str(e), 500)

@@ -690,3 +690,92 @@ export async function fetchReconDashboard(): Promise<ReconDashboardData> {
 export async function triggerAutoMatch(): Promise<{ unmatched_input: number; matches_found: number; matches_inserted: number; match_rate: number }> {
   return api('/tms/recon/auto-match', { method: 'POST', headers: headers('admin') });
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 4: Intelligence & Polish APIs
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── M9: MRP / Procurement ───────────────────────────────────────────────
+
+export interface MrpDashboardData {
+  kpis: {
+    total_items: number;
+    total_value: number;
+    reorder_needed: number;
+    stockout_rate: number;
+    abc_a_count: number;
+    abc_b_count: number;
+    abc_c_count: number;
+  };
+  abc_summary: { class: string; count: number; value: number }[];
+  by_category: { categoria: string; items: number; value: number; stockouts: number }[];
+  stockout_alerts: {
+    codigo: string; descripcion: string; stock: number; punto_reorden: number;
+    dias_cobertura: number; lead_time: number; consumo_mensual: number;
+    abc: string; categoria: string; urgency: string;
+  }[];
+}
+
+export interface ReorderRecommendation {
+  codigo: string; descripcion: string; stock_actual: number;
+  consumo_mensual: number; lead_time: number; dias_cobertura: number;
+  eoq: number; safety_stock: number; cantidad_sugerida: number;
+  costo_estimado: number; abc: string; proveedor: string;
+}
+
+export async function fetchMrpDashboard(): Promise<MrpDashboardData> {
+  return api('/tms/mrp/dashboard', { headers: headers('admin') });
+}
+
+export async function fetchReorderRecommendations(): Promise<{ recommendations: ReorderRecommendation[]; total_items: number; total_investment: number }> {
+  return api('/tms/mrp/reorder', { headers: headers('admin') });
+}
+
+// ── M10: Board Reporting ────────────────────────────────────────────────
+
+export interface BoardExecutiveData {
+  cash: { total_ingresos: number; total_egresos: number; flujo_neto: number };
+  projects: { total_contratado: number; total_cobrado: number; contratos_activos: number; total_contratos: number };
+  debt: { total_capital: number; active_loans: number };
+  cxp: { pending_batches: number; pending_amount: number };
+  fx: { rate_compra: number; rate_venta: number; rate_fecha: string };
+  by_bu: { empresa: string; ingresos: number; egresos: number; flujo_neto: number }[];
+}
+
+export interface BuComparisonItem {
+  empresa: string;
+  ingresos: number; egresos: number; flujo_neto: number;
+  contratado: number; facturado: number; cobrado: number; contratos: number;
+}
+
+export async function fetchBoardExecutive(): Promise<BoardExecutiveData> {
+  return api('/tms/board/executive', { headers: headers('admin') });
+}
+
+export async function fetchBuComparison(): Promise<{ business_units: BuComparisonItem[] }> {
+  return api('/tms/board/bu-comparison', { headers: headers('admin') });
+}
+
+// ── M12: Admin & Configuration ──────────────────────────────────────────
+
+export interface AdminHealthData {
+  entity_counts: Record<string, number>;
+  total_entities: number;
+  recent_audit: Record<string, unknown>[];
+  recent_notifications: Record<string, unknown>[];
+  business_rules_count: number;
+  roles: string[];
+}
+
+export interface CdcStatusItem {
+  entity: string; table: string; last_sync: string | null;
+  age_minutes: number; status: string;
+}
+
+export async function fetchAdminHealth(): Promise<AdminHealthData> {
+  return api('/tms/admin/health', { headers: headers('admin') });
+}
+
+export async function fetchCdcStatus(): Promise<{ cdc_status: CdcStatusItem[]; checked_at: string }> {
+  return api('/tms/admin/cdc-status', { headers: headers('admin') });
+}
