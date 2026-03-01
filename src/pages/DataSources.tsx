@@ -295,12 +295,27 @@ export function DataSources() {
       // Client-side XLSX parsing for larger files
       setProgress({ current: 0, total: 0, stage: 'Parseando Excel en navegador...' });
       const arrayBuffer = await fileBlob.arrayBuffer();
-      const workbook = XLSX.read(new Uint8Array(arrayBuffer), {
-        type: 'array',
-        cellFormula: false,
-        cellHTML: false,
-        cellStyles: false,
-      });
+      let workbook: XLSX.WorkBook;
+      try {
+        workbook = XLSX.read(new Uint8Array(arrayBuffer), {
+          type: 'array',
+          cellFormula: false,
+          cellHTML: false,
+          cellStyles: false,
+        });
+      } catch (xlsxErr: unknown) {
+        // Retry with binary string — works around "Bad compressed size" zip errors
+        // in xlsx files saved by certain Excel/LibreOffice versions
+        const binaryStr = Array.from(new Uint8Array(arrayBuffer))
+          .map((b) => String.fromCharCode(b))
+          .join('');
+        workbook = XLSX.read(binaryStr, {
+          type: 'binary',
+          cellFormula: false,
+          cellHTML: false,
+          cellStyles: false,
+        });
+      }
 
       const colIndex = (header: string[], keys: string[]): number => {
         for (const k of keys) {

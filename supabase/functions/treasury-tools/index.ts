@@ -101,14 +101,30 @@ async function ingestExcel(supabase: ReturnType<typeof createClient>, fileId: st
 
   try {
     // Minimize memory: skip formulas, styles, and cap rows per sheet
-    const workbook = XLSX.read(new Uint8Array(arrayBuffer), {
-      type: "array",
-      sheetRows: 500,       // cap at 500 rows per sheet — sufficient for treasury data
-      cellFormula: false,    // don't parse formulas
-      cellHTML: false,       // don't generate HTML
-      cellStyles: false,     // don't read styles
-      cellDates: false,      // keep dates as numbers (we parse manually)
-    });
+    let workbook: XLSX.WorkBook;
+    try {
+      workbook = XLSX.read(new Uint8Array(arrayBuffer), {
+        type: "array",
+        sheetRows: 500,
+        cellFormula: false,
+        cellHTML: false,
+        cellStyles: false,
+        cellDates: false,
+      });
+    } catch (_zipErr) {
+      // Retry with binary string — works around "Bad compressed size" zip errors
+      const binaryStr = Array.from(new Uint8Array(arrayBuffer))
+        .map((b: number) => String.fromCharCode(b))
+        .join("");
+      workbook = XLSX.read(binaryStr, {
+        type: "binary",
+        sheetRows: 500,
+        cellFormula: false,
+        cellHTML: false,
+        cellStyles: false,
+        cellDates: false,
+      });
+    }
     let totalRows = 0;
     const sheetsProcessed: string[] = [];
 
