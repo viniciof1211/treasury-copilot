@@ -523,3 +523,170 @@ export async function fetchInvoicingDashboard(): Promise<InvoicingDashboardData>
 export async function fetchContractDetail(id: string): Promise<{ contrato: Record<string, unknown>; hitos: Record<string, unknown>[] }> {
   return api(`/tms/invoicing/contract/${id}`, { headers: headers('admin') });
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 3: Advanced Module Analytics APIs
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── M5: Project Finance ─────────────────────────────────────────────────
+
+export interface ProjectFinanceDashboardData {
+  kpis: {
+    total_contratado: number;
+    total_facturado: number;
+    total_cobrado: number;
+    total_pendiente: number;
+    total_saldo: number;
+    contratos_activos: number;
+    contratos_total: number;
+    facturacion_ratio: number;
+    cobranza_ratio: number;
+    hitos_total: number;
+    hitos_pendientes: number;
+    milestone_alerts_count: number;
+  };
+  lifecycle: { estado: string; count: number }[];
+  by_area: { area: string; contratado: number; facturado: number; cobrado: number; count: number; margin_pct: number }[];
+  by_empresa: { empresa: string; contratado: number; facturado: number; cobrado: number; count: number }[];
+  by_tipo: { tipo: string; contratado: number; count: number }[];
+  milestone_alerts: {
+    hito_id: string; contrato_id: string; nombre: string; monto: number;
+    fecha_programada: string; days_until: number; severity: string; estado: string;
+  }[];
+  collection_forecast: { week: number; start: string; end: string; monto: number; hitos: number }[];
+}
+
+export interface BudgetVsActualItem {
+  id: string;
+  numero_contrato: string;
+  nombre: string;
+  empresa: string;
+  area_comercial: string;
+  contratado: number;
+  facturado: number;
+  cobrado: number;
+  pendiente: number;
+  saldo: number;
+  variance_factura: number;
+  variance_cobro: number;
+  facturacion_pct: number;
+  cobranza_pct: number;
+}
+
+export async function fetchProjectFinanceDashboard(empresa?: string): Promise<ProjectFinanceDashboardData> {
+  const qs = empresa ? `?empresa=${empresa}` : '';
+  return api(`/tms/projects/dashboard${qs}`, { headers: headers('admin') });
+}
+
+export async function fetchBudgetVsActual(): Promise<{ contracts: BudgetVsActualItem[]; count: number }> {
+  return api('/tms/projects/budget-vs-actual', { headers: headers('admin') });
+}
+
+// ── M4: FX & Risk Management ────────────────────────────────────────────
+
+export interface FxDashboardData {
+  kpis: {
+    net_exposure_usd: number;
+    usd_receivables: number;
+    usd_payables: number;
+    usd_debt: number;
+    rate_compra: number;
+    rate_venta: number;
+    rate_fecha: string;
+    total_hedged: number;
+    hedge_ratio: number;
+    var_95_1d: number;
+    fx_gain_loss: number;
+    active_hedges_count: number;
+  };
+  by_bu: { empresa: string; receivables: number; payables: number; debt: number; net: number }[];
+  rate_trend: { fecha: string; compra: number; venta: number; promedio: number }[];
+  hedges: {
+    id: string; tipo: string; monto_nocional: number; tasa_pactada: number;
+    fecha_vencimiento: string; estado: string; contraparte: string;
+  }[];
+}
+
+export interface FxScenarioData {
+  base_rate: number;
+  net_exposure: number;
+  scenarios: {
+    shock_pct: number; new_rate: number; impact_crc: number; impact_usd: number; label: string;
+  }[];
+}
+
+export async function fetchFxDashboard(): Promise<FxDashboardData> {
+  return api('/tms/fx/dashboard', { headers: headers('admin') });
+}
+
+export async function fetchFxScenarios(): Promise<FxScenarioData> {
+  return api('/tms/fx/scenarios', { headers: headers('admin') });
+}
+
+// ── M8: Debt & Operations Management ────────────────────────────────────
+
+export interface DebtDashboardData {
+  kpis: {
+    total_saldo_original: number;
+    total_capital_vigente: number;
+    total_intereses_acumulados: number;
+    active_instruments: number;
+    total_instruments: number;
+    weighted_avg_rate: number;
+    next_payment_amount: number;
+  };
+  maturity_profile: { bucket: string; capital: number }[];
+  by_tipo: { tipo: string; capital: number; count: number }[];
+  by_banco: { banco: string; capital: number; count: number }[];
+  by_moneda: { moneda: string; capital: number }[];
+  payment_schedule: {
+    week: number; start: string; end: string;
+    principal: number; intereses: number; cuota: number; pagos: number;
+  }[];
+  instruments: {
+    id: string; nombre: string; tipo: string; banco: string; moneda: string;
+    saldo_original: number; capital_vigente: number; tasa_interes: number;
+    fecha_vencimiento: string; estado: string; empresa: string;
+  }[];
+}
+
+export async function fetchDebtDashboard(): Promise<DebtDashboardData> {
+  return api('/tms/debt/dashboard', { headers: headers('admin') });
+}
+
+export async function fetchDebtInstrumentDetail(id: string): Promise<{ instrument: Record<string, unknown>; schedule: Record<string, unknown>[] }> {
+  return api(`/tms/debt/instrument/${id}`, { headers: headers('admin') });
+}
+
+// ── M7: Bank Reconciliation ─────────────────────────────────────────────
+
+export interface ReconDashboardData {
+  kpis: {
+    total_statements: number;
+    total_lines: number;
+    matched_count: number;
+    unmatched_count: number;
+    match_rate: number;
+    total_credits: number;
+    total_debits: number;
+    bank_movements_count: number;
+  };
+  by_match_type: { type: string; count: number }[];
+  by_banco: { banco: string; statements: number; saldo_banco: number; saldo_libros: number; diferencia: number }[];
+  exception_queue: {
+    id: string; fecha: string; descripcion: string; referencia: string;
+    monto: number; banco: string; cuenta: string; tipo: string;
+  }[];
+  balances: {
+    banco: string; cuenta: string; moneda: string;
+    saldo_banco: number; saldo_libros: number; diferencia: number; fecha_estado: string;
+  }[];
+}
+
+export async function fetchReconDashboard(): Promise<ReconDashboardData> {
+  return api('/tms/recon/dashboard', { headers: headers('admin') });
+}
+
+export async function triggerAutoMatch(): Promise<{ unmatched_input: number; matches_found: number; matches_inserted: number; match_rate: number }> {
+  return api('/tms/recon/auto-match', { method: 'POST', headers: headers('admin') });
+}
