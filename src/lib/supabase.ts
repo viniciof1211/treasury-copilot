@@ -15,21 +15,10 @@ export const supabase = createClient(
   supabaseAnonKey || 'placeholder-key',
 );
 
-/** Ensure the treasury-files bucket exists. Call once on app startup. */
+/** Ensure the treasury-files bucket exists. Call once on app startup.
+ *  NOTE: Buckets are pre-created in Supabase. The anon key lacks permission
+ *  to create them (RLS), so this is a no-op guard — silently skips. */
 export async function ensureStorageBuckets() {
-  if (!supabaseUrl || !supabaseAnonKey) return; // skip if not configured
-  const buckets = [
-    { id: 'treasury-files', public: false },
-    { id: 'ai-images', public: true },
-  ];
-  for (const b of buckets) {
-    const { error } = await supabase.storage.createBucket(b.id, {
-      public: b.public,
-      fileSizeLimit: 52428800, // 50MB
-    });
-    // Ignore "already exists" errors
-    if (error && !error.message?.includes('already exists')) {
-      console.warn(`Bucket "${b.id}":`, error.message);
-    }
-  }
+  // Buckets already exist server-side; anon key cannot create them.
+  // Skip entirely to avoid 400 / RLS errors in the console.
 }
