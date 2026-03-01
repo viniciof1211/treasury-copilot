@@ -64,6 +64,9 @@ from agent.tms_core_modules import (
     fx_dashboard, fx_scenario_sim,
     debt_dashboard, debt_instrument_detail,
     recon_dashboard, recon_auto_match,
+    mrp_dashboard, mrp_reorder_recommendations,
+    board_executive_dashboard, board_bu_comparison,
+    admin_system_health, admin_cdc_status,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -1424,6 +1427,13 @@ routes = [
     Route("/tms/debt/instrument/{id}", debt_instrument_detail, methods=["GET"]),
     Route("/tms/recon/dashboard", recon_dashboard, methods=["GET"]),
     Route("/tms/recon/auto-match", recon_auto_match, methods=["POST"]),
+    # ── TMS Phase 4: Intelligence & Polish ──
+    Route("/tms/mrp/dashboard", mrp_dashboard, methods=["GET"]),
+    Route("/tms/mrp/reorder", mrp_reorder_recommendations, methods=["GET"]),
+    Route("/tms/board/executive", board_executive_dashboard, methods=["GET"]),
+    Route("/tms/board/bu-comparison", board_bu_comparison, methods=["GET"]),
+    Route("/tms/admin/health", admin_system_health, methods=["GET"]),
+    Route("/tms/admin/cdc-status", admin_cdc_status, methods=["GET"]),
     # ── TMS Engine: Data Virtualization Layer + Transactional CRUD ──
     Route("/tms/entities", tms_list_entities, methods=["GET"]),
     Route("/tms/audit", tms_audit_log, methods=["GET"]),
