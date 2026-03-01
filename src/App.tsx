@@ -17,6 +17,10 @@ import { CashManagementDashboard } from './pages/CashManagementDashboard';
 import { CxPPaymentsDashboard } from './pages/CxPPaymentsDashboard';
 import { CxCCollectionsDashboard } from './pages/CxCCollectionsDashboard';
 import { InvoicingModuleDashboard } from './pages/InvoicingModuleDashboard';
+import { ProjectFinanceDashboard } from './pages/ProjectFinanceDashboard';
+import { FxRiskDashboard } from './pages/FxRiskDashboard';
+import { DebtManagementDashboard } from './pages/DebtManagementDashboard';
+import { BankReconDashboard } from './pages/BankReconDashboard';
 import { Admin } from './pages/Admin';
 import { ensureStorageBuckets } from './lib/supabase';
 
@@ -45,6 +49,10 @@ function App() {
           <Route path="/tms/cxp" element={<CxPPaymentsDashboard />} />
           <Route path="/tms/cxc" element={<CxCCollectionsDashboard />} />
           <Route path="/tms/invoicing" element={<InvoicingModuleDashboard />} />
+          <Route path="/tms/projects" element={<ProjectFinanceDashboard />} />
+          <Route path="/tms/fx" element={<FxRiskDashboard />} />
+          <Route path="/tms/debt" element={<DebtManagementDashboard />} />
+          <Route path="/tms/recon" element={<BankReconDashboard />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

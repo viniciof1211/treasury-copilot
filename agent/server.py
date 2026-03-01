@@ -60,6 +60,10 @@ from agent.tms_core_modules import (
     cxp_dashboard, cxp_payment_schedule,
     cxc_dashboard, cxc_collection_worklist,
     invoicing_dashboard, invoicing_contract_detail,
+    project_finance_dashboard, project_budget_vs_actual,
+    fx_dashboard, fx_scenario_sim,
+    debt_dashboard, debt_instrument_detail,
+    recon_dashboard, recon_auto_match,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -1411,6 +1415,15 @@ routes = [
     Route("/tms/cxc/worklist", cxc_collection_worklist, methods=["GET"]),
     Route("/tms/invoicing/dashboard", invoicing_dashboard, methods=["GET"]),
     Route("/tms/invoicing/contract/{id}", invoicing_contract_detail, methods=["GET"]),
+    # ── TMS Phase 3: Advanced Module Analytics ──
+    Route("/tms/projects/dashboard", project_finance_dashboard, methods=["GET"]),
+    Route("/tms/projects/budget-vs-actual", project_budget_vs_actual, methods=["GET"]),
+    Route("/tms/fx/dashboard", fx_dashboard, methods=["GET"]),
+    Route("/tms/fx/scenarios", fx_scenario_sim, methods=["GET"]),
+    Route("/tms/debt/dashboard", debt_dashboard, methods=["GET"]),
+    Route("/tms/debt/instrument/{id}", debt_instrument_detail, methods=["GET"]),
+    Route("/tms/recon/dashboard", recon_dashboard, methods=["GET"]),
+    Route("/tms/recon/auto-match", recon_auto_match, methods=["POST"]),
     # ── TMS Engine: Data Virtualization Layer + Transactional CRUD ──
     Route("/tms/entities", tms_list_entities, methods=["GET"]),
     Route("/tms/audit", tms_audit_log, methods=["GET"]),
