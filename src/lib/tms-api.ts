@@ -360,3 +360,166 @@ export async function markNotificationRead(id: string): Promise<unknown> {
 export async function fetchBusinessRules(): Promise<{ data: BusinessRule[] }> {
   return api('/tms/rules', { headers: headers('admin') });
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 2: Core Module Analytics APIs
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── M1: Cash Management ─────────────────────────────────────────────────
+
+export interface CashPosition {
+  empresa: string;
+  total_ingresos: number;
+  total_egresos: number;
+  flujo_neto: number;
+  saldo_acumulado: number;
+  moneda: string;
+  semanas: number;
+}
+
+export interface ForecastWeek {
+  semana: string;
+  ingresos_ejecutado: number;
+  egresos_ejecutado: number;
+  ingresos_proyectado: number;
+  egresos_proyectado: number;
+  flujo_neto: number;
+  saldo_acumulado: number;
+}
+
+export interface LiquidityBucket {
+  bucket: string;
+  max_days: number;
+  inflows: number;
+  outflows: number;
+  gap: number;
+  cumulative_gap: number;
+}
+
+export async function fetchCashPosition(empresa?: string): Promise<{ positions: CashPosition[]; consolidated: CashPosition }> {
+  const qs = empresa ? `?empresa=${empresa}` : '';
+  return api(`/tms/cash/position${qs}`, { headers: headers('admin') });
+}
+
+export async function fetchCashForecast(weeks = 12, empresa?: string): Promise<{ forecast: ForecastWeek[] }> {
+  const qs = new URLSearchParams({ weeks: String(weeks) });
+  if (empresa) qs.set('empresa', empresa);
+  return api(`/tms/cash/forecast?${qs}`, { headers: headers('admin') });
+}
+
+export async function fetchLiquidityGap(): Promise<{ buckets: LiquidityBucket[] }> {
+  return api('/tms/cash/liquidity-gap', { headers: headers('admin') });
+}
+
+export async function fetchCashScenarios(): Promise<{ scenarios: Record<string, unknown>[] }> {
+  return api('/tms/cash/scenarios', { headers: headers('admin') });
+}
+
+// ── M2: CxP Payments ────────────────────────────────────────────────────
+
+export interface CxPDashboardData {
+  kpis: {
+    total_pendiente: number;
+    total_pagado: number;
+    total_items: number;
+    pending_batch_count: number;
+    pending_batch_amount: number;
+    approved_batch_count: number;
+  };
+  aging: { bucket: string; monto: number; count: number }[];
+  by_priority: { priority: string; monto: number }[];
+  by_estado: { estado: string; count: number }[];
+  by_metodo: { metodo: string; monto: number }[];
+  top_proveedores: { nombre: string; monto: number }[];
+  pending_batches: Record<string, unknown>[];
+}
+
+export interface PaymentScheduleWeek {
+  week: number;
+  start: string;
+  end: string;
+  batches: number;
+  total_monto: number;
+  items: number;
+  approved: number;
+  pending: number;
+}
+
+export async function fetchCxPDashboard(empresa?: string): Promise<CxPDashboardData> {
+  const qs = empresa ? `?empresa=${empresa}` : '';
+  return api(`/tms/cxp/dashboard${qs}`, { headers: headers('admin') });
+}
+
+export async function fetchPaymentSchedule(weeks = 4): Promise<{ schedule: PaymentScheduleWeek[] }> {
+  return api(`/tms/cxp/schedule?weeks=${weeks}`, { headers: headers('admin') });
+}
+
+// ── M3: CxC Collections ─────────────────────────────────────────────────
+
+export interface CxCDashboardData {
+  kpis: {
+    total_pendiente: number;
+    total_cobrado: number;
+    total_items: number;
+    dso: number;
+    collection_rate: number;
+  };
+  aging: { bucket: string; monto: number; count: number }[];
+  by_area: { area: string; pendiente: number; cobrado: number; count: number }[];
+  by_gestor: { gestor: string; pendiente: number; count: number; dias_mora_avg: number }[];
+  by_estado: { estado: string; count: number }[];
+  top_clientes: { cliente: string; monto: number }[];
+}
+
+export interface WorklistItem {
+  cliente: string;
+  factura: string;
+  monto: number;
+  moneda: string;
+  dias_mora: number;
+  area_comercial: string;
+  gestor_cobro: string;
+  estado: string;
+  priority_score: number;
+  vencimiento: string;
+  proyecto?: string;
+}
+
+export async function fetchCxCDashboard(empresa?: string): Promise<CxCDashboardData> {
+  const qs = empresa ? `?empresa=${empresa}` : '';
+  return api(`/tms/cxc/dashboard${qs}`, { headers: headers('admin') });
+}
+
+export async function fetchCollectionWorklist(gestor?: string, area?: string, limit = 50): Promise<{ worklist: WorklistItem[] }> {
+  const qs = new URLSearchParams({ limit: String(limit) });
+  if (gestor) qs.set('gestor', gestor);
+  if (area) qs.set('area', area);
+  return api(`/tms/cxc/worklist?${qs}`, { headers: headers('admin') });
+}
+
+// ── M6: Invoicing ───────────────────────────────────────────────────────
+
+export interface InvoicingDashboardData {
+  kpis: {
+    total_contratado: number;
+    total_facturado: number;
+    total_cobrado: number;
+    total_pendiente: number;
+    facturacion_ratio: number;
+    cobranza_ratio: number;
+    contratos_activos: number;
+    hitos_pendientes: number;
+  };
+  contratos_by_estado: { estado: string; count: number }[];
+  hitos_by_estado: { estado: string; count: number; monto: number }[];
+  by_empresa: { empresa: string; contratado: number; facturado: number; cobrado: number; contratos: number }[];
+  upcoming_hitos: Record<string, unknown>[];
+}
+
+export async function fetchInvoicingDashboard(): Promise<InvoicingDashboardData> {
+  return api('/tms/invoicing/dashboard', { headers: headers('admin') });
+}
+
+export async function fetchContractDetail(id: string): Promise<{ contrato: Record<string, unknown>; hitos: Record<string, unknown>[] }> {
+  return api(`/tms/invoicing/contract/${id}`, { headers: headers('admin') });
+}

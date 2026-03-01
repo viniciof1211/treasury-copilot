@@ -13,6 +13,10 @@ import { DataModelDashboard } from './pages/DataModelDashboard';
 import { ProjectsDashboard } from './pages/ProjectsDashboard';
 import { ERPModulesDashboard } from './pages/ERPModulesDashboard';
 import { TMSDashboard } from './pages/TMSDashboard';
+import { CashManagementDashboard } from './pages/CashManagementDashboard';
+import { CxPPaymentsDashboard } from './pages/CxPPaymentsDashboard';
+import { CxCCollectionsDashboard } from './pages/CxCCollectionsDashboard';
+import { InvoicingModuleDashboard } from './pages/InvoicingModuleDashboard';
 import { Admin } from './pages/Admin';
 import { ensureStorageBuckets } from './lib/supabase';
 
@@ -37,6 +41,10 @@ function App() {
           <Route path="/projects" element={<ProjectsDashboard />} />
           <Route path="/erp" element={<ERPModulesDashboard />} />
           <Route path="/tms" element={<TMSDashboard />} />
+          <Route path="/tms/cash" element={<CashManagementDashboard />} />
+          <Route path="/tms/cxp" element={<CxPPaymentsDashboard />} />
+          <Route path="/tms/cxc" element={<CxCCollectionsDashboard />} />
+          <Route path="/tms/invoicing" element={<InvoicingModuleDashboard />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
