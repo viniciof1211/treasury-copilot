@@ -40,6 +40,16 @@ from agent.knowledge_base import (
     get_sync_stats,
 )
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from agent.projects_api import (
+    projects_kpis, projects_portfolio, projects_contracts, projects_alerts,
+    projects_gantt, projects_area_breakdown, projects_collections,
+    projects_forecast, projects_aging, projects_curation_save,
+)
+from agent.erp_modules_api import (
+    erp_facturas, erp_factura_detalle, erp_facturas_por_negocio,
+    erp_facturas_mensual, erp_facturas_kpis, erp_top_clientes,
+    erp_contratos, erp_contrato_detalle, erp_hitos, erp_table_schema,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -1357,6 +1367,28 @@ routes = [
     Route("/data-model/kafka", kafka_status, methods=["GET"]),
     Route("/data-model/erp-schema", erp_schema, methods=["GET"]),
     Route("/data-model/curation", data_curation_save, methods=["POST"]),
+    # Projects & Contracts BI
+    Route("/projects/kpis", projects_kpis, methods=["GET"]),
+    Route("/projects/portfolio", projects_portfolio, methods=["GET"]),
+    Route("/projects/contracts", projects_contracts, methods=["GET"]),
+    Route("/projects/alerts", projects_alerts, methods=["GET"]),
+    Route("/projects/gantt", projects_gantt, methods=["GET"]),
+    Route("/projects/areas", projects_area_breakdown, methods=["GET"]),
+    Route("/projects/collections", projects_collections, methods=["GET"]),
+    Route("/projects/forecast", projects_forecast, methods=["GET"]),
+    Route("/projects/aging", projects_aging, methods=["GET"]),
+    Route("/projects/curation", projects_curation_save, methods=["POST"]),
+    # ERP Modules: Facturas, Contratos, Hitos
+    Route("/erp/facturas", erp_facturas, methods=["GET"]),
+    Route("/erp/factura-detalle", erp_factura_detalle, methods=["GET"]),
+    Route("/erp/facturas-negocio", erp_facturas_por_negocio, methods=["GET"]),
+    Route("/erp/facturas-mensual", erp_facturas_mensual, methods=["GET"]),
+    Route("/erp/facturas-kpis", erp_facturas_kpis, methods=["GET"]),
+    Route("/erp/top-clientes", erp_top_clientes, methods=["GET"]),
+    Route("/erp/contratos", erp_contratos, methods=["GET"]),
+    Route("/erp/contrato-detalle", erp_contrato_detalle, methods=["GET"]),
+    Route("/erp/hitos", erp_hitos, methods=["GET"]),
+    Route("/erp/table-schema", erp_table_schema, methods=["GET"]),
 ]
 
 # Mount static assets (JS/CSS/images) if STATIC_DIR exists

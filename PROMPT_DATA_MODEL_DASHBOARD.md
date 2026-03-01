@@ -6,7 +6,7 @@
 
 ## 1. PROJECT OVERVIEW
 
-Build a **standalone full-stack web application** called **"Data Model Dashboard"** — a comprehensive data modeling, monitoring, and curation tool for an enterprise treasury system. The app has:
+Build a new tab/module (next to Ontology, Copilot, Spaces, etc) called **"Data Model Dashboard"** — a comprehensive data modeling, monitoring, and curation tool for an enterprise treasury system. The app has:
 
 - **Frontend**: React 18 + TypeScript + Vite + TailwindCSS + `@xyflow/react` for ER diagrams + `lucide-react` for icons
 - **Backend**: Python (Starlette) API server with endpoints for schema introspection, Kafka status, ERP schema, CDC monitoring, FAISS KB stats, and data curation write-back
