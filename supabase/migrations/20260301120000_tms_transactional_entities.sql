@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS tms.contratos (
   nombre              text NOT NULL,
   descripcion         text,
   -- Parties
-  cliente_id          uuid REFERENCES tms.clientes(id),
+  cliente_id          uuid,  -- FK to tms.clientes(id) when canonical model is deployed
   codigo_cliente      text,
   nombre_cliente      text,
   area_comercial      text,
@@ -300,12 +300,12 @@ CREATE TABLE IF NOT EXISTS tms.payment_instructions (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   batch_id            uuid REFERENCES tms.payment_batches(id) ON DELETE SET NULL,
   -- Payee
-  proveedor_id        uuid REFERENCES tms.proveedores(id),
+  proveedor_id        uuid,  -- FK to tms.proveedores(id) when canonical model is deployed
   codigo_proveedor    text,
   nombre_beneficiario text NOT NULL,
   -- Reference
   documento_cxp       text,
-  cxp_id              uuid REFERENCES tms.cuentas_por_pagar(id),
+  cxp_id              uuid,  -- FK to tms.cuentas_por_pagar(id) when canonical model is deployed
   factura_referencia  text,
   -- Amount
   monto               numeric(18,4) NOT NULL,

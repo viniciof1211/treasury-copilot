@@ -55,6 +55,12 @@ from agent.tms_engine import (
     tms_delete, tms_approve, tms_audit_log, tms_notifications,
     tms_mark_notification_read, tms_business_rules,
 )
+from agent.tms_core_modules import (
+    cash_position, cash_forecast, cash_liquidity_gap, cash_scenarios,
+    cxp_dashboard, cxp_payment_schedule,
+    cxc_dashboard, cxc_collection_worklist,
+    invoicing_dashboard, invoicing_contract_detail,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -1394,6 +1400,17 @@ routes = [
     Route("/erp/contrato-detalle", erp_contrato_detalle, methods=["GET"]),
     Route("/erp/hitos", erp_hitos, methods=["GET"]),
     Route("/erp/table-schema", erp_table_schema, methods=["GET"]),
+    # ── TMS Phase 2: Core Module Analytics ──
+    Route("/tms/cash/position", cash_position, methods=["GET"]),
+    Route("/tms/cash/forecast", cash_forecast, methods=["GET"]),
+    Route("/tms/cash/liquidity-gap", cash_liquidity_gap, methods=["GET"]),
+    Route("/tms/cash/scenarios", cash_scenarios, methods=["GET"]),
+    Route("/tms/cxp/dashboard", cxp_dashboard, methods=["GET"]),
+    Route("/tms/cxp/schedule", cxp_payment_schedule, methods=["GET"]),
+    Route("/tms/cxc/dashboard", cxc_dashboard, methods=["GET"]),
+    Route("/tms/cxc/worklist", cxc_collection_worklist, methods=["GET"]),
+    Route("/tms/invoicing/dashboard", invoicing_dashboard, methods=["GET"]),
+    Route("/tms/invoicing/contract/{id}", invoicing_contract_detail, methods=["GET"]),
     # ── TMS Engine: Data Virtualization Layer + Transactional CRUD ──
     Route("/tms/entities", tms_list_entities, methods=["GET"]),
     Route("/tms/audit", tms_audit_log, methods=["GET"]),
