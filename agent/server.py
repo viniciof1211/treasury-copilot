@@ -50,6 +50,11 @@ from agent.erp_modules_api import (
     erp_facturas_mensual, erp_facturas_kpis, erp_top_clientes,
     erp_contratos, erp_contrato_detalle, erp_hitos, erp_table_schema,
 )
+from agent.tms_engine import (
+    tms_list_entities, tms_query, tms_get_one, tms_create, tms_update,
+    tms_delete, tms_approve, tms_audit_log, tms_notifications,
+    tms_mark_notification_read, tms_business_rules,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -1389,6 +1394,18 @@ routes = [
     Route("/erp/contrato-detalle", erp_contrato_detalle, methods=["GET"]),
     Route("/erp/hitos", erp_hitos, methods=["GET"]),
     Route("/erp/table-schema", erp_table_schema, methods=["GET"]),
+    # ── TMS Engine: Data Virtualization Layer + Transactional CRUD ──
+    Route("/tms/entities", tms_list_entities, methods=["GET"]),
+    Route("/tms/audit", tms_audit_log, methods=["GET"]),
+    Route("/tms/rules", tms_business_rules, methods=["GET"]),
+    Route("/tms/notifications", tms_notifications, methods=["GET"]),
+    Route("/tms/notifications/{id}/read", tms_mark_notification_read, methods=["PUT"]),
+    Route("/tms/{entity}/{id}/approve", tms_approve, methods=["POST"]),
+    Route("/tms/{entity}/{id}", tms_get_one, methods=["GET"]),
+    Route("/tms/{entity}/{id}", tms_update, methods=["PUT"]),
+    Route("/tms/{entity}/{id}", tms_delete, methods=["DELETE"]),
+    Route("/tms/{entity}", tms_query, methods=["GET"]),
+    Route("/tms/{entity}", tms_create, methods=["POST"]),
 ]
 
 # Mount static assets (JS/CSS/images) if STATIC_DIR exists
