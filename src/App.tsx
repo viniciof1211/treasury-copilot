@@ -12,6 +12,7 @@ import { DataSources } from './pages/DataSources';
 import { DataModelDashboard } from './pages/DataModelDashboard';
 import { ProjectsDashboard } from './pages/ProjectsDashboard';
 import { ERPModulesDashboard } from './pages/ERPModulesDashboard';
+import { TMSDashboard } from './pages/TMSDashboard';
 import { Admin } from './pages/Admin';
 import { ensureStorageBuckets } from './lib/supabase';
 
@@ -35,6 +36,7 @@ function App() {
           <Route path="/data-model" element={<DataModelDashboard />} />
           <Route path="/projects" element={<ProjectsDashboard />} />
           <Route path="/erp" element={<ERPModulesDashboard />} />
+          <Route path="/tms" element={<TMSDashboard />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

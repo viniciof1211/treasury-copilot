@@ -36,3 +36,5 @@ __pycache__/
 .venv/
 venv/
 treasury_faiss_index/
+.vercel
+.env*.local

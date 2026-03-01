@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, Database, Briefcase, Settings, Landmark, Target, ShoppingCart, Receipt, Presentation, GitBranch, FileText } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Database, Briefcase, Settings, Landmark, Target, ShoppingCart, Receipt, Presentation, GitBranch, FileText, Shield } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
 const navigation = [
@@ -14,6 +14,7 @@ const navigation = [
   { name: 'Modelo de Datos', href: '/data-model', icon: GitBranch },
   { name: 'Proyectos', href: '/projects', icon: Briefcase },
   { name: 'ERP Módulos', href: '/erp', icon: FileText },
+  { name: 'TMS', href: '/tms', icon: Shield },
   { name: 'Admin', href: '/admin', icon: Settings },
 ];
 
