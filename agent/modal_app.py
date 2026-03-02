@@ -583,6 +583,8 @@ def web():
         bank_accounts_list, bank_statement_import, bank_payment_initiate,
         einvoice_status, einvoice_submit, einvoice_webhook,
         pcgraf_writeback_status, pcgraf_writeback_push,
+        integration_connections_list, integration_connect, integration_disconnect, integration_test,
+        sync_jobs_list, sync_trigger, sync_schedule_list, sync_schedule_update,
     )
 
     # ------------------------------------------------------------------
@@ -689,6 +691,15 @@ def web():
         Route("/tms/einvoice/webhook", einvoice_webhook, methods=["POST"]),
         Route("/tms/writeback/status", pcgraf_writeback_status, methods=["GET"]),
         Route("/tms/writeback/push", pcgraf_writeback_push, methods=["POST"]),
+        # TMS Phase 5: Integration Management & Sync Orchestration
+        Route("/tms/integrations", integration_connections_list, methods=["GET"]),
+        Route("/tms/integrations/connect", integration_connect, methods=["POST"]),
+        Route("/tms/integrations/disconnect", integration_disconnect, methods=["POST"]),
+        Route("/tms/integrations/test", integration_test, methods=["POST"]),
+        Route("/tms/sync/jobs", sync_jobs_list, methods=["GET"]),
+        Route("/tms/sync/trigger", sync_trigger, methods=["POST"]),
+        Route("/tms/sync/schedule", sync_schedule_list, methods=["GET"]),
+        Route("/tms/sync/schedule", sync_schedule_update, methods=["POST"]),
         # TMS Engine: Data Virtualization Layer + Transactional CRUD
         Route("/tms/entities", tms_list_entities, methods=["GET"]),
         Route("/tms/audit", tms_audit_log, methods=["GET"]),
