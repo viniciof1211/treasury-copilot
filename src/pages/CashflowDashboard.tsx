@@ -16,6 +16,8 @@ import {
   semaphore, ARA_COLORS, getPriorityLabel, formatDate,
 } from '../lib/utils';
 import { normalizeCurrency } from '../hooks/useExchangeRate';
+import { InfoTooltip } from '../components/ui/InfoTooltip';
+import { CASHFLOW, DASHBOARD } from '../lib/glossary';
 import {
   querySQL, type CxPItem, type FlujoItem, type Projection,
   type TimePeriod, getDateCutoff, PERIOD_LABELS, tooltipStyle,
@@ -485,12 +487,12 @@ export function CashflowDashboard() {
           <>
             {/* KPIs Row 1: Cashflow */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-              <KPICard title="Total CxP" value={totalCxP} icon={CreditCard} semaphore={semaphore(totalCxP, 100000, 500000, true)} subtitle={`${cxp.length} facturas`} />
-              <KPICard title="Ingresos (Cuotas)" value={totalInflows} icon={Wallet} semaphore={totalInflows > 0 ? 'green' : 'red'} subtitle={`${flujo.length} operaciones`} />
-              <KPICard title="Cashflow Neto" value={netCashflow} icon={netCashflow >= 0 ? TrendingUp : TrendingDown} semaphore={semaphore(netCashflow, 0, -50000)} subtitle={netCashflow >= 0 ? 'Superávit' : 'Déficit'} />
-              <KPICard title="Ratio Cobertura" value={ratio} icon={ShieldCheck} format="number" semaphore={semaphore(ratio, 1.5, 1.0)} subtitle="Ingresos / CxP" />
+              <KPICard title="Total CxP" value={totalCxP} icon={CreditCard} semaphore={semaphore(totalCxP, 100000, 500000, true)} subtitle={`${cxp.length} facturas`} info={DASHBOARD.totalCxP} />
+              <KPICard title="Ingresos (Cuotas)" value={totalInflows} icon={Wallet} semaphore={totalInflows > 0 ? 'green' : 'red'} subtitle={`${flujo.length} operaciones`} info={DASHBOARD.totalInflows} />
+              <KPICard title="Cashflow Neto" value={netCashflow} icon={netCashflow >= 0 ? TrendingUp : TrendingDown} semaphore={semaphore(netCashflow, 0, -50000)} subtitle={netCashflow >= 0 ? 'Superávit' : 'Déficit'} info={DASHBOARD.netCashflow} />
+              <KPICard title="Ratio Cobertura" value={ratio} icon={ShieldCheck} format="number" semaphore={semaphore(ratio, 1.5, 1.0)} subtitle="Ingresos / CxP" info={DASHBOARD.coverageRatio} />
               <KPICard title="DSO Proxy" value={dsoProxy} icon={Clock} format="number" semaphore={semaphore(dsoProxy, 30, 45, true)} subtitle="Días promedio" />
-              <KPICard title="% Mora" value={overdueRate} icon={AlertOctagon} format="number" semaphore={semaphore(overdueRate, 10, 30, true)} subtitle={`${overdueCxP.length} vencidas`} />
+              <KPICard title="% Mora" value={overdueRate} icon={AlertOctagon} format="number" semaphore={semaphore(overdueRate, 10, 30, true)} subtitle={`${overdueCxP.length} vencidas`} info={CASHFLOW.cxpAging} />
             </div>
 
             {/* Real vs Projected */}

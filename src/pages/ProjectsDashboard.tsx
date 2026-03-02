@@ -16,7 +16,10 @@ import { Badge } from '../components/ui/Badge';
 import { GanttChart } from '../components/projects/GanttChart';
 import { MilestoneAlerts } from '../components/projects/MilestoneAlerts';
 import { ContractDetail } from '../components/projects/ContractDetail';
+import { AlertEmailSubscription } from '../components/projects/AlertEmailSubscription';
 import { formatCurrency, formatCompactCurrency, formatDate } from '../lib/utils';
+import { InfoTooltip, type TooltipMeta } from '../components/ui/InfoTooltip';
+import { PROJECTS } from '../lib/glossary';
 import {
   fetchProjectKPIs, fetchPortfolio, fetchContracts, fetchAlerts,
   fetchGantt, fetchAreaBreakdown, fetchForecast, fetchAging,
@@ -168,11 +171,11 @@ export function ProjectsDashboard() {
         {/* KPI Cards */}
         {kpis && (
           <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-4">
-            <KPICard icon={FileText} label="Contratos" value={kpis.total_contracts.toString()} sub={`${kpis.unique_clients} clientes`} color="text-[#1A4A28]" />
-            <KPICard icon={DollarSign} label="Monto Total" value={formatCompactCurrency(kpis.total_monto_contrato)} sub={`${kpis.pct_cobrado_global.toFixed(0)}% cobrado`} color="text-[#1A4A28]" />
-            <KPICard icon={ArrowUpRight} label="Cancelado" value={formatCompactCurrency(kpis.total_cancelado)} sub={formatCompactCurrency(kpis.total_pendiente_cobrar) + ' pendiente'} color="text-emerald-600" />
+            <KPICard icon={FileText} label="Contratos" value={kpis.total_contracts.toString()} sub={`${kpis.unique_clients} clientes`} color="text-[#1A4A28]" info={PROJECTS.activeContracts} />
+            <KPICard icon={DollarSign} label="Monto Total" value={formatCompactCurrency(kpis.total_monto_contrato)} sub={`${kpis.pct_cobrado_global.toFixed(0)}% cobrado`} color="text-[#1A4A28]" info={PROJECTS.totalContractValue} />
+            <KPICard icon={ArrowUpRight} label="Cancelado" value={formatCompactCurrency(kpis.total_cancelado)} sub={formatCompactCurrency(kpis.total_pendiente_cobrar) + ' pendiente'} color="text-emerald-600" info={PROJECTS.collectionEfficiency} />
             <KPICard icon={ArrowDownRight} label="Facturado" value={formatCompactCurrency(kpis.total_facturado)} sub={formatCompactCurrency(kpis.total_pendiente_facturar) + ' pend fact'} color="text-blue-600" />
-            <KPICard icon={AlertTriangle} label="Alertas Criticas" value={kpis.critical_alert_count.toString()} sub={formatCompactCurrency(kpis.critical_alert_value) + ' en riesgo'} color="text-red-600" />
+            <KPICard icon={AlertTriangle} label="Alertas Criticas" value={kpis.critical_alert_count.toString()} sub={formatCompactCurrency(kpis.critical_alert_value) + ' en riesgo'} color="text-red-600" info={PROJECTS.milestoneAlerts} />
             <KPICard icon={Clock} label="Alertas 14d" value={kpis.warning_alert_count.toString()} sub={`${kpis.total_alert_count} total alertas`} color="text-amber-600" />
           </div>
         )}
@@ -228,12 +231,12 @@ export function ProjectsDashboard() {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function KPICard({ icon: Icon, label, value, sub, color }: { icon: any; label: string; value: string; sub: string; color: string }) {
+function KPICard({ icon: Icon, label, value, sub, color, info }: { icon: any; label: string; value: string; sub: string; color: string; info?: TooltipMeta }) {
   return (
     <Card className="p-4">
       <div className="flex items-center gap-2 mb-2">
         <Icon className={`w-4 h-4 ${color}`} />
-        <span className="text-xs font-medium text-gray-500">{label}</span>
+        <span className="text-xs font-medium text-gray-500 flex items-center gap-1">{label}{info && <InfoTooltip meta={info} size="sm" />}</span>
       </div>
       <div className="text-2xl font-bold text-gray-900">{value}</div>
       <div className="text-xs text-gray-500 mt-1">{sub}</div>
@@ -454,7 +457,15 @@ function GanttTab({ items, ganttClient, setGanttClient, portfolio, onSelectContr
 // --- Alerts Tab ---
 function AlertsTab({ alerts, onSelectContract }: { alerts: MilestoneAlert[]; onSelectContract: (id: string) => void }) {
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div className="space-y-6">
+      {/* Email subscription panel */}
+      <Card>
+        <CardContent className="p-4">
+          <AlertEmailSubscription />
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -521,6 +532,7 @@ function AlertsTab({ alerts, onSelectContract }: { alerts: MilestoneAlert[]; onS
           </div>
         </CardContent>
       </Card>
+    </div>
     </div>
   );
 }

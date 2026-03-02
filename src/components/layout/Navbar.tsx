@@ -5,7 +5,7 @@ import {
   Target, ShoppingCart, Receipt, Presentation, GitBranch, FileText, Shield,
   Menu, X, ChevronDown, ChevronRight,
   Wallet, CreditCard, FileCheck, FolderKanban, BarChart3, Activity,
-  Package, PieChart, Wrench,
+  Package, PieChart, Wrench, BookOpen,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -48,7 +48,10 @@ const navGroups: NavGroup[] = [
   { label: 'Principal', items: mainNav },
   { label: 'Datos & ERP', items: dataNav },
   { label: 'TMS Módulos', items: tmsNav },
-  { label: 'Sistema', items: [{ name: 'Admin', href: '/admin', icon: Settings }] },
+  { label: 'Sistema', items: [
+    { name: 'Admin', href: '/admin', icon: Settings },
+    { name: 'Glosario', href: '/glossary', icon: BookOpen },
+  ] },
 ];
 
 // Top-bar quick links (desktop only — space-efficient subset)

@@ -27,6 +27,7 @@ const MrpDashboard = lazy(() => import('./pages/MrpDashboard').then(m => ({ defa
 const BoardReportingDashboard = lazy(() => import('./pages/BoardReportingDashboard').then(m => ({ default: m.BoardReportingDashboard })));
 const AdminConfigDashboard = lazy(() => import('./pages/AdminConfigDashboard').then(m => ({ default: m.AdminConfigDashboard })));
 const Admin = lazy(() => import('./pages/Admin').then(m => ({ default: m.Admin })));
+const Glossary = lazy(() => import('./pages/Glossary').then(m => ({ default: m.Glossary })));
 
 // ── Route loading fallback ──────────────────────────────────────────────
 function PageLoader() {
@@ -70,6 +71,7 @@ function App() {
             <Route path="/tms/board" element={<BoardReportingDashboard />} />
             <Route path="/tms/admin" element={<AdminConfigDashboard />} />
             <Route path="/admin" element={<Admin />} />
+            <Route path="/glossary" element={<Glossary />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

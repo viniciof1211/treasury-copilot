@@ -15,6 +15,7 @@ import {
   formatDate, semaphore, ARA_COLORS,
 } from '../lib/utils';
 import { useExchangeRate, toUSD, fromUSD, normalizeCurrency } from '../hooks/useExchangeRate';
+import { CREDIT } from '../lib/glossary';
 import {
   querySQL, type FlujoItem, type TimePeriod, getDateCutoff, PERIOD_LABELS, tooltipStyle,
 } from '../lib/queries';
@@ -342,8 +343,8 @@ export function CreditDashboard() {
           <>
             {/* KPIs Row 1 */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-              <KPICard title="Líneas de Crédito" value={uniqueOps.length} icon={Layers} format="number" semaphore="green" subtitle={`${uniqueBanks.size} bancos`} />
-              <KPICard title="Saldo Original" value={totalSaldo} icon={BanknoteIcon} subtitle="Total desembolsado" />
+              <KPICard title="Líneas de Crédito" value={uniqueOps.length} icon={Layers} format="number" semaphore="green" subtitle={`${uniqueBanks.size} bancos`} info={CREDIT.totalDebt} />
+              <KPICard title="Saldo Original" value={totalSaldo} icon={BanknoteIcon} subtitle="Total desembolsado" info={CREDIT.totalDebt} />
               <KPICard title="Capital Vigente" value={totalCapAct} icon={Activity} semaphore={totalCapAct > 0 ? 'yellow' : 'green'} subtitle="Por amortizar" />
               <KPICard title="% Amortizado" value={`${pctAmortized.toFixed(1)}%`} icon={CheckCircle2} format="text" semaphore={pctAmortized > 50 ? 'green' : pctAmortized > 20 ? 'yellow' : 'red'} subtitle="Saldo pagado" />
               <KPICard title="Deuda Largo Plazo" value={totalSaldoLP} icon={Landmark} subtitle="USD — Largo Plazo" />
@@ -352,7 +353,7 @@ export function CreditDashboard() {
             {/* KPIs Row 2 */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               <KPICard title="Principal" value={totalPrincipal} icon={TrendingDown} subtitle="Abonos a capital" />
-              <KPICard title="Intereses" value={totalIntereses} icon={Percent} semaphore={semaphore(intRatio, 5, 15, true)} subtitle={`${intRatio.toFixed(1)}% del principal`} />
+              <KPICard title="Intereses" value={totalIntereses} icon={Percent} semaphore={semaphore(intRatio, 5, 15, true)} subtitle={`${intRatio.toFixed(1)}% del principal`} info={CREDIT.weightedAvgRate} />
               <KPICard title="Cuotas Totales" value={totalCuota} icon={DollarSign} subtitle={`${uniqueCompanies.size} compañías`} />
               <KPICard title="Banco Filtrado" value={bankFilter === 'all' ? 'Todos' : bankFilter} icon={Landmark} format="text" subtitle={bankFilter === 'all' ? `${allBanks.length} bancos` : `${flujo.length} operaciones`} />
             </div>
