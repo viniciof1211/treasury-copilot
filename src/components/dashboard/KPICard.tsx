@@ -1,6 +1,7 @@
 import { LucideIcon, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { Card, CardContent } from '../ui/Card';
 import { formatCurrency, formatPercent, SEMAPHORE_COLORS } from '../../lib/utils';
+import { InfoTooltip, type TooltipMeta } from '../ui/InfoTooltip';
 
 interface KPICardProps {
   title: string;
@@ -12,6 +13,7 @@ interface KPICardProps {
   currency?: string;
   semaphore?: 'green' | 'yellow' | 'red';
   subtitle?: string;
+  info?: TooltipMeta;
 }
 
 export function KPICard({
@@ -24,6 +26,7 @@ export function KPICard({
   currency = 'USD',
   semaphore,
   subtitle,
+  info,
 }: KPICardProps) {
   // Format the display value
   const formattedValue =
@@ -69,7 +72,10 @@ export function KPICard({
               {sem && (
                 <span className={`w-2.5 h-2.5 rounded-full ${sem.dot} flex-shrink-0`} />
               )}
-              <p className="text-xs font-medium text-gray-500 leading-tight">{title}</p>
+              <p className="text-xs font-medium text-gray-500 leading-tight flex items-center gap-1">
+                {title}
+                {info && <InfoTooltip meta={info} size="sm" />}
+              </p>
             </div>
             <p className={`${valueSizeClass} font-bold text-gray-900 leading-tight break-words`}>
               {formattedValue}

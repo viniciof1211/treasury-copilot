@@ -18,6 +18,8 @@ import {
 import {
   useExchangeRate, toUSD, fmtCur, fmtCompact, normalizeCurrency,
 } from '../hooks/useExchangeRate';
+import { DASHBOARD } from '../lib/glossary';
+import { InfoTooltip } from '../components/ui/InfoTooltip';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend, ComposedChart, Line, Area, ReferenceLine,
@@ -267,15 +269,15 @@ export function Dashboard() {
           <>
             {/* KPIs — all USD */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-              <KPICard title="Total CxP" value={totalCxP} icon={CreditCard} currency="USD" semaphore={semaphore(totalCxP, 100000, 500000, true)} subtitle={`${cxp.length} facturas`} />
-              <KPICard title="Ingresos Operativos" value={totalInflows} icon={Wallet} currency="USD" semaphore={totalInflows > 0 ? 'green' : 'red'} subtitle={`${flujo.length} operaciones`} />
-              <KPICard title="Cashflow Neto" value={netCashflow} icon={netCashflow >= 0 ? TrendingUp : TrendingDown} currency="USD" semaphore={semaphore(netCashflow, 0, -50000)} subtitle={netCashflow >= 0 ? 'Superávit' : 'Déficit'} />
-              <KPICard title="Deuda Largo Plazo" value={debtLP} icon={Landmark} currency="USD" semaphore={debtLP > 0 ? 'yellow' : 'green'} subtitle="USD — Largo Plazo" />
-              <KPICard title="Deuda Corto Plazo" value={debtCP} icon={Activity} currency="USD" semaphore={debtCP > 0 ? 'yellow' : 'green'} subtitle="Capital Trabajo" />
+              <KPICard title="Total CxP" value={totalCxP} icon={CreditCard} currency="USD" semaphore={semaphore(totalCxP, 100000, 500000, true)} subtitle={`${cxp.length} facturas`} info={DASHBOARD.totalCxP} />
+              <KPICard title="Ingresos Operativos" value={totalInflows} icon={Wallet} currency="USD" semaphore={totalInflows > 0 ? 'green' : 'red'} subtitle={`${flujo.length} operaciones`} info={DASHBOARD.totalInflows} />
+              <KPICard title="Cashflow Neto" value={netCashflow} icon={netCashflow >= 0 ? TrendingUp : TrendingDown} currency="USD" semaphore={semaphore(netCashflow, 0, -50000)} subtitle={netCashflow >= 0 ? 'Superávit' : 'Déficit'} info={DASHBOARD.netCashflow} />
+              <KPICard title="Deuda Largo Plazo" value={debtLP} icon={Landmark} currency="USD" semaphore={debtLP > 0 ? 'yellow' : 'green'} subtitle="USD — Largo Plazo" info={DASHBOARD.debtLP} />
+              <KPICard title="Deuda Corto Plazo" value={debtCP} icon={Activity} currency="USD" semaphore={debtCP > 0 ? 'yellow' : 'green'} subtitle="Capital Trabajo" info={DASHBOARD.debtCP} />
             </div>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-4">
-              <KPICard title="Ratio Cobertura" value={ratio} icon={ShieldCheck} format="number" semaphore={semaphore(ratio, 1.5, 1.0)} subtitle="Ingresos / CxP" />
-              <KPICard title="Runway" value={runwayMonths} icon={Clock} format="months" semaphore={semaphore(runwayMonths, 6, 3)} subtitle="Balance positivo" />
+              <KPICard title="Ratio Cobertura" value={ratio} icon={ShieldCheck} format="number" semaphore={semaphore(ratio, 1.5, 1.0)} subtitle="Ingresos / CxP" info={DASHBOARD.coverageRatio} />
+              <KPICard title="Runway" value={runwayMonths} icon={Clock} format="months" semaphore={semaphore(runwayMonths, 6, 3)} subtitle="Balance positivo" info={DASHBOARD.runway} />
               <KPICard title="Deuda Total" value={totalSaldo} icon={Landmark} currency="USD" semaphore={totalSaldo > 0 ? 'yellow' : 'green'} subtitle={`${uniqueOps} líneas · ${uniqueBanks} bancos`} />
             </div>
 
@@ -337,7 +339,7 @@ export function Dashboard() {
 
             {/* Main chart: cashflow + projection (USD) */}
             <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Target className="w-4 h-4 text-[#1A4A28]" />Flujo de Caja: Histórico + Proyección 12M ($)</CardTitle></CardHeader>
+              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Target className="w-4 h-4 text-[#1A4A28]" />Flujo de Caja: Histórico + Proyección 12M ($) <InfoTooltip meta={DASHBOARD.projectionChart} /></CardTitle></CardHeader>
               <CardContent>
                 {projChart.length > 0 ? (
                   <ResponsiveContainer width="100%" height={340}>
@@ -375,7 +377,7 @@ export function Dashboard() {
             {/* BU summary (USD) */}
             {buData.length > 0 && (
               <Card>
-                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Layers className="w-4 h-4 text-[#1A4A28]" />Cashflow por Unidad de Negocio ($)</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Layers className="w-4 h-4 text-[#1A4A28]" />Cashflow por Unidad de Negocio ($) <InfoTooltip meta={DASHBOARD.flujoByBank} /></CardTitle></CardHeader>
                 <CardContent>
                   <ResponsiveContainer width="100%" height={260}>
                     <BarChart data={buData.map(b => ({ ...b, bu: b.bu.length > 18 ? b.bu.slice(0, 15) + '...' : b.bu }))}>

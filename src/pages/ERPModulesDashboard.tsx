@@ -9,6 +9,8 @@ import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card'
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { formatCurrency, formatDate } from '../lib/utils';
+import { InfoTooltip, type TooltipMeta } from '../components/ui/InfoTooltip';
+import { ERP } from '../lib/glossary';
 import {
   fetchFacturas, fetchFacturaDetalle, fetchFacturasKPIs,
   fetchFacturasPorNegocio, fetchFacturasMensual, fetchTopClientes,
@@ -306,9 +308,9 @@ function FacturasTab({
       {/* KPI Cards */}
       {kpis && (
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-          <KPICard icon={<FileText />} label="Total Facturas" value={kpis.all_time.total_facturas.toLocaleString()} />
+          <KPICard icon={<FileText />} label="Total Facturas" value={kpis.all_time.total_facturas.toLocaleString()} info={ERP.facturasTotales} />
           <KPICard icon={<Users />} label="Clientes Únicos" value={kpis.all_time.clientes_unicos.toLocaleString()} />
-          <KPICard icon={<DollarSign />} label="Monto Total" value={formatCurrency(kpis.all_time.sum_total)} />
+          <KPICard icon={<DollarSign />} label="Monto Total" value={formatCurrency(kpis.all_time.sum_total)} info={ERP.facturasMontoTotal} />
           <KPICard icon={<TrendingUp />} label="Impuesto Total" value={formatCurrency(kpis.all_time.sum_impuesto)} />
           <KPICard icon={<FileText />} label="Últ. 30 días" value={kpis.last_30_days.facturas_30d?.toLocaleString() || '0'} sub={formatCurrency(kpis.last_30_days.total_30d || 0)} />
           <KPICard icon={<Building2 />} label="Negocios" value={String(kpis.all_time.negocios)} />
@@ -931,14 +933,14 @@ function SchemaTab({ data, table, onTableChange, onLoad }: {
 // KPI Card helper
 // ═══════════════════════════════════════════════════════════════════════════
 
-function KPICard({ icon, label, value, sub }: { icon: React.ReactNode; label: string; value: string; sub?: string }) {
+function KPICard({ icon, label, value, sub, info }: { icon: React.ReactNode; label: string; value: string; sub?: string; info?: TooltipMeta }) {
   return (
     <Card>
       <CardContent>
         <div className="flex items-center gap-3 py-1">
           <div className="p-2 bg-[#1A4A28]/10 rounded-lg text-[#1A4A28]">{icon}</div>
           <div>
-            <p className="text-xs text-gray-500">{label}</p>
+            <p className="text-xs text-gray-500 flex items-center gap-1">{label}{info && <InfoTooltip meta={info} size="sm" />}</p>
             <p className="text-lg font-bold text-gray-900">{value}</p>
             {sub && <p className="text-xs text-gray-500">{sub}</p>}
           </div>
