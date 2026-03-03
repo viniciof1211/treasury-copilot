@@ -14,8 +14,9 @@ import {
 } from 'recharts';
 import {
   FolderKanban, Building2, Target, AlertTriangle, CalendarDays,
-  RefreshCw, BarChart3, TrendingUp,
+  RefreshCw, BarChart3, TrendingUp, FileImage,
 } from 'lucide-react';
+import { ContractPdfViewer } from '../components/ContractPdfViewer';
 
 const tooltipStyle = { backgroundColor: 'white', border: '1px solid #e5e7eb', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', fontSize: '12px' };
 const PIE_COLORS = [ARA_COLORS.primary, ARA_COLORS.gold, ARA_COLORS.blue, ARA_COLORS.red, ARA_COLORS.orange, '#8B5CF6', ARA_COLORS.gray];
@@ -25,7 +26,8 @@ export function ProjectFinanceDashboard() {
   const [budgetData, setBudgetData] = useState<BudgetVsActualItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [empresaFilter, setEmpresaFilter] = useState('');
-  const [activeTab, setActiveTab] = useState<'overview' | 'budget' | 'alerts'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'budget' | 'alerts' | 'documentos'>('overview');
+  const [pdfViewDocId, setPdfViewDocId] = useState<number | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -80,6 +82,7 @@ export function ProjectFinanceDashboard() {
             { id: 'overview' as const, label: 'Resumen', icon: BarChart3 },
             { id: 'budget' as const, label: 'Budget vs Actual', icon: TrendingUp },
             { id: 'alerts' as const, label: 'Alertas Hitos', icon: AlertTriangle },
+            { id: 'documentos' as const, label: 'Documentos PDF', icon: FileImage },
           ]).map(t => {
             const Icon = t.icon;
             return (
@@ -311,6 +314,26 @@ export function ProjectFinanceDashboard() {
               ) : <p className="py-8 text-center text-gray-400">Sin alertas de hitos próximos</p>}
             </CardContent>
           </Card>
+        )}
+
+        {/* Documentos PDF Tab */}
+        {activeTab === 'documentos' && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <FileImage className="w-4 h-4 text-[#1A4A28]" />
+                Documentos de Contratos por Proyecto (CEM0.IM00)
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ContractPdfViewer inline />
+            </CardContent>
+          </Card>
+        )}
+
+        {/* PDF Viewer Modal (triggered from Budget vs Actual row) */}
+        {pdfViewDocId != null && (
+          <ContractPdfViewer docId={pdfViewDocId} onClose={() => setPdfViewDocId(null)} />
         )}
       </div>
     </div>

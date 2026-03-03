@@ -562,6 +562,7 @@ def web():
         erp_facturas, erp_factura_detalle, erp_facturas_por_negocio,
         erp_facturas_mensual, erp_facturas_kpis, erp_top_clientes,
         erp_contratos, erp_contrato_detalle, erp_hitos, erp_table_schema,
+        contract_pdf_schema, contract_pdf_list, contract_pdf_serve,
     )
     from agent.tms_engine import (
         tms_list_entities, tms_query, tms_get_one, tms_create, tms_update,
@@ -583,6 +584,8 @@ def web():
         bank_accounts_list, bank_statement_import, bank_payment_initiate,
         einvoice_status, einvoice_submit, einvoice_webhook,
         pcgraf_writeback_status, pcgraf_writeback_push,
+        integration_connections_list, integration_connect, integration_disconnect, integration_test,
+        sync_jobs_list, sync_trigger, sync_schedule_list, sync_schedule_update,
     )
 
     # ------------------------------------------------------------------
@@ -653,6 +656,10 @@ def web():
         Route("/erp/contrato-detalle", erp_contrato_detalle, methods=["GET"]),
         Route("/erp/hitos", erp_hitos, methods=["GET"]),
         Route("/erp/table-schema", erp_table_schema, methods=["GET"]),
+        # Contract PDF Viewer (CEM0.IM00)
+        Route("/contracts/pdf/schema", contract_pdf_schema, methods=["GET"]),
+        Route("/contracts/pdf/list", contract_pdf_list, methods=["GET"]),
+        Route("/contracts/pdf/{id}", contract_pdf_serve, methods=["GET"]),
         # TMS Phase 2: Core Module Analytics
         Route("/tms/cash/position", cash_position, methods=["GET"]),
         Route("/tms/cash/forecast", cash_forecast, methods=["GET"]),
@@ -689,6 +696,15 @@ def web():
         Route("/tms/einvoice/webhook", einvoice_webhook, methods=["POST"]),
         Route("/tms/writeback/status", pcgraf_writeback_status, methods=["GET"]),
         Route("/tms/writeback/push", pcgraf_writeback_push, methods=["POST"]),
+        # TMS Phase 5: Integration Management & Sync Orchestration
+        Route("/tms/integrations", integration_connections_list, methods=["GET"]),
+        Route("/tms/integrations/connect", integration_connect, methods=["POST"]),
+        Route("/tms/integrations/disconnect", integration_disconnect, methods=["POST"]),
+        Route("/tms/integrations/test", integration_test, methods=["POST"]),
+        Route("/tms/sync/jobs", sync_jobs_list, methods=["GET"]),
+        Route("/tms/sync/trigger", sync_trigger, methods=["POST"]),
+        Route("/tms/sync/schedule", sync_schedule_list, methods=["GET"]),
+        Route("/tms/sync/schedule", sync_schedule_update, methods=["POST"]),
         # TMS Engine: Data Virtualization Layer + Transactional CRUD
         Route("/tms/entities", tms_list_entities, methods=["GET"]),
         Route("/tms/audit", tms_audit_log, methods=["GET"]),

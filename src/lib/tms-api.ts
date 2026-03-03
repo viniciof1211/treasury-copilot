@@ -781,53 +781,236 @@ export async function fetchCdcStatus(): Promise<{ cdc_status: CdcStatusItem[]; c
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Phase 5: Optimization — Bank API, E-Invoice, PcGraf Write-back
+// Phase 5: Bank API, E-Invoice, PcGraf Write-back, Integration & Sync
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Bank API Integration ────────────────────────────────────────────────
 
 export interface BankAccount {
-  bank: string; account_number: string; currency: string; type: string;
-  balance: number | null; last_sync: string | null; status: string; api_type: string;
+  id: string | null;
+  bank: string;
+  account_number: string;
+  currency: string;
+  type: string;
+  balance: number | null;
+  balance_date: string | null;
+  last_sync: string | null;
+  status: string;
+  api_type: string;
+  iban: string | null;
+  sinpe_number: string | null;
+  connection_status: string;
 }
 
-export async function fetchBankAccounts(): Promise<{ accounts: BankAccount[]; total: number; note: string }> {
+export interface BankConnection {
+  id: string;
+  provider: string;
+  display_name: string;
+  status: string;
+  enabled: boolean;
+  last_test_at: string | null;
+  last_error: string | null;
+}
+
+export async function fetchBankAccounts(): Promise<{ accounts: BankAccount[]; total: number; connections: BankConnection[] }> {
   return api('/tms/bank/accounts', { headers: headers('admin') });
 }
 
-export async function importBankStatement(bank: string, format: string): Promise<Record<string, unknown>> {
-  return api('/tms/bank/import', { method: 'POST', headers: headers('admin'), body: JSON.stringify({ bank, format }) });
+export async function importBankStatement(data: {
+  account_id: string; transactions: Record<string, unknown>[]; source?: string;
+}): Promise<{ status: string; batch_id: string; rows_imported: number; rows_failed: number; job_id: string }> {
+  return api('/tms/bank/import', { method: 'POST', headers: headers('admin'), body: JSON.stringify(data) });
 }
 
-export async function initiateBankPayment(data: { type: string; amount: number; currency: string; beneficiary: string }): Promise<Record<string, unknown>> {
+export async function initiateBankPayment(data: {
+  type: string; amount: number; currency: string; beneficiary: string; account_id?: string; reference?: string;
+}): Promise<{ status: string; reference: string; writeback_id: string; message: string }> {
   return api('/tms/bank/pay', { method: 'POST', headers: headers('admin'), body: JSON.stringify(data) });
 }
 
-// ── E-Invoice (Almamater) ───────────────────────────────────────────────
+// ── E-Invoice (Almamater / Hacienda) ────────────────────────────────────
 
 export interface EInvoiceItem {
-  numero_factura: string; cliente: string; total: number; fecha: string;
-  empresa: string; einvoice_status: string; hacienda_key: string | null; almamater_ref: string | null;
+  id: string;
+  numero_factura: string;
+  tipo_documento: string;
+  cliente: string;
+  total: number;
+  fecha: string;
+  empresa: string;
+  einvoice_status: string;
+  hacienda_status: string;
+  hacienda_key: string | null;
+  almamater_ref: string | null;
+  submitted_at: string | null;
+  accepted_at: string | null;
 }
 
-export async function fetchEInvoiceStatus(): Promise<{ invoices: EInvoiceItem[]; total: number; accepted: number; pending: number; note: string }> {
+export interface EInvoiceConnections {
+  hacienda_atv: { status: string; enabled: boolean };
+  almamater: { status: string; enabled: boolean };
+}
+
+export async function fetchEInvoiceStatus(): Promise<{
+  invoices: EInvoiceItem[]; total: number; accepted: number; pending: number; rejected: number;
+  connections: EInvoiceConnections;
+}> {
   return api('/tms/einvoice/status', { headers: headers('admin') });
 }
 
-export async function submitEInvoice(numero_factura: string): Promise<Record<string, unknown>> {
-  return api('/tms/einvoice/submit', { method: 'POST', headers: headers('admin'), body: JSON.stringify({ numero_factura }) });
+export async function submitEInvoice(data: {
+  numero_factura: string; tipo_documento?: string; emisor_cedula?: string; emisor_nombre?: string;
+  receptor_cedula?: string; receptor_nombre?: string; total?: number; currency?: string; fecha?: string; empresa?: string;
+}): Promise<{ status: string; id: string; numero_factura: string; almamater_ref: string; message: string }> {
+  return api('/tms/einvoice/submit', { method: 'POST', headers: headers('admin'), body: JSON.stringify(data) });
 }
 
 // ── PcGraf Write-back ───────────────────────────────────────────────────
 
 export interface WritebackEntity {
-  entity: string; pcgraf_table: string; direction: string; pending: number; status: string;
+  entity: string;
+  pcgraf_table: string;
+  direction: string;
+  pending: number;
+  approved: number;
+  pushed: number;
+  failed: number;
+  status: string;
+  items: { id: string; record_id: string; operation: string; status: string; created_at: string; approved_by: string | null }[];
 }
 
-export async function fetchWritebackStatus(): Promise<{ writeback_queue: WritebackEntity[]; total_pending: number; last_push: string | null; mode: string; note: string }> {
+export interface WritebackConnection {
+  status: string;
+  enabled: boolean;
+  host: string;
+}
+
+export async function fetchWritebackStatus(): Promise<{
+  writeback_queue: WritebackEntity[]; total_pending: number; last_push: string | null; mode: string;
+  connection: WritebackConnection;
+}> {
   return api('/tms/writeback/status', { headers: headers('admin') });
 }
 
-export async function pushWriteback(entity: string, record_ids: string[]): Promise<Record<string, unknown>> {
-  return api('/tms/writeback/push', { method: 'POST', headers: headers('admin'), body: JSON.stringify({ entity, record_ids }) });
+export async function pushWriteback(entity: string, record_ids: string[], action?: 'approve' | 'push' | 'reject'): Promise<Record<string, unknown>> {
+  return api('/tms/writeback/push', { method: 'POST', headers: headers('admin'), body: JSON.stringify({ entity, record_ids, action: action || 'push' }) });
+}
+
+// ── Integration Connections Management ──────────────────────────────────
+
+export interface IntegrationConnection {
+  id: string;
+  provider: string;
+  display_name: string;
+  category: string;
+  status: string;
+  enabled: boolean;
+  last_test_at: string | null;
+  last_test_ok: boolean | null;
+  last_error: string | null;
+  config_keys: string[];
+  schedule: { enabled: boolean; interval_minutes: number; last_run_at: string | null; next_run_at: string | null } | null;
+}
+
+export async function fetchIntegrations(): Promise<{ connections: IntegrationConnection[]; total: number }> {
+  return api('/tms/integrations', { headers: headers('admin') });
+}
+
+export async function connectIntegration(provider: string, config: Record<string, unknown> = {}, enabled = true): Promise<{ status: string; provider: string; display_name: string; message: string }> {
+  return api('/tms/integrations/connect', { method: 'POST', headers: headers('admin'), body: JSON.stringify({ provider, config, enabled }) });
+}
+
+export async function disconnectIntegration(provider: string): Promise<{ status: string; provider: string; message: string }> {
+  return api('/tms/integrations/disconnect', { method: 'POST', headers: headers('admin'), body: JSON.stringify({ provider }) });
+}
+
+export async function testIntegration(provider: string): Promise<{ provider: string; test_ok: boolean; error: string | null; tested_at: string }> {
+  return api('/tms/integrations/test', { method: 'POST', headers: headers('admin'), body: JSON.stringify({ provider }) });
+}
+
+// ── Sync Orchestration ──────────────────────────────────────────────────
+
+export interface SyncJob {
+  id: string;
+  integration: string;
+  job_type: string;
+  status: string;
+  started_at: string;
+  completed_at: string | null;
+  rows_processed: number;
+  rows_created: number;
+  rows_updated: number;
+  rows_failed: number;
+  error_message: string | null;
+  triggered_by: string;
+  details: string | null;
+}
+
+export interface SyncSchedule {
+  id: string;
+  integration: string;
+  enabled: boolean;
+  interval_minutes: number;
+  last_run_at: string | null;
+  next_run_at: string | null;
+}
+
+export async function fetchSyncJobs(integration?: string, limit = 50): Promise<{ jobs: SyncJob[]; total: number }> {
+  const qs = new URLSearchParams({ limit: String(limit) });
+  if (integration) qs.set('integration', integration);
+  return api(`/tms/sync/jobs?${qs}`, { headers: headers('admin') });
+}
+
+export async function triggerSync(integration: string): Promise<{ status: string; integration: string; job_id: string; message: string }> {
+  return api('/tms/sync/trigger', { method: 'POST', headers: headers('admin'), body: JSON.stringify({ integration }) });
+}
+
+export async function fetchSyncSchedules(): Promise<{ schedules: SyncSchedule[] }> {
+  return api('/tms/sync/schedule', { headers: headers('admin') });
+}
+
+export async function updateSyncSchedule(integration: string, enabled?: boolean, interval_minutes?: number): Promise<{ status: string; integration: string }> {
+  return api('/tms/sync/schedule', { method: 'POST', headers: headers('admin'), body: JSON.stringify({ integration, enabled, interval_minutes }) });
+}
+
+// ─── Contract Document Viewer (CEM0.dbo.IM00) ──────────────────────────────
+
+export interface ContractDocument {
+  IDLinea: number;
+  CodProyecto: number | null;
+  nombre_documento: string;
+  extension: string;
+  Grupo: number | null;
+  observaciones: string;
+  file_name: string;
+  quien_ingreso: string;
+  fecha_ingreso: string;
+  supervisor: string;
+  data_size: number | null;
+  has_file: number;
+  proyecto_nombre: string | null;
+  proyecto_cliente: string | null;
+  proyecto_monto: number | null;
+  proyecto_estado: number | null;
+}
+
+export interface ContractDocListResponse {
+  documents: ContractDocument[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export async function fetchContractDocuments(
+  search = '', proyecto = '', ext = '', limit = 100, offset = 0,
+): Promise<ContractDocListResponse> {
+  const qs = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (search) qs.set('q', search);
+  if (proyecto) qs.set('proyecto', proyecto);
+  if (ext) qs.set('ext', ext);
+  return api(`/contracts/pdf/list?${qs}`, { headers: headers('admin') });
+}
+
+export function getContractDocUrl(docId: number): string {
+  return `${BASE}/contracts/pdf/${docId}`;
 }

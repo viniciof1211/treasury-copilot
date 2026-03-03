@@ -3,13 +3,14 @@ import {
   TrendingUp, AlertTriangle, BarChart3, Calendar,
   DollarSign, Users, Building2, ChevronDown, ChevronRight,
   Filter, RefreshCw, PieChart, ArrowUpRight, ArrowDownRight,
-  Clock, FileText, Search, X, Edit3,
+  Clock, FileText, Search, X, Edit3, FileImage,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
   PieChart as RPieChart, Pie, Cell, Legend, AreaChart, Area,
 } from 'recharts';
 import { Layout } from '../components/layout/Layout';
+import { ContractPdfViewer } from '../components/ContractPdfViewer';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -29,7 +30,7 @@ import type {
   GanttItem, AreaBreakdown, WeeklyForecast, AgingSummary,
 } from '../types/projects';
 
-type Tab = 'overview' | 'gantt' | 'alerts' | 'collections' | 'aging' | 'curation';
+type Tab = 'overview' | 'gantt' | 'alerts' | 'collections' | 'aging' | 'curation' | 'documentos';
 
 const AREA_COLORS = ['#1A4A28', '#2D6A3F', '#3B82F6', '#F59E0B', '#8B5CF6', '#EC4899', '#14B8A6', '#6B7280'];
 const AGING_COLORS = ['#10B981', '#3B82F6', '#F59E0B', '#F97316', '#EF4444'];
@@ -189,6 +190,7 @@ export function ProjectsDashboard() {
             { key: 'collections', label: 'Cobros', icon: DollarSign },
             { key: 'aging', label: 'Cartera', icon: PieChart },
             { key: 'curation', label: 'Datos', icon: FileText },
+            { key: 'documentos', label: 'Documentos PDF', icon: FileImage },
           ] as { key: Tab; label: string; icon: any }[]).map((t) => {
             const Icon = t.icon;
             return (
@@ -217,6 +219,19 @@ export function ProjectsDashboard() {
         {tab === 'collections' && <CollectionsTab forecast={forecast} />}
         {tab === 'aging' && <AgingTab summary={agingSummary} pieData={agingPieData} />}
         {tab === 'curation' && <CurationTab contracts={filteredContracts} searchQuery={searchQuery} setSearchQuery={setSearchQuery} areaFilter={areaFilter} setAreaFilter={setAreaFilter} uniqueAreas={uniqueAreas} onSelect={setSelectedContract} />}
+        {tab === 'documentos' && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <FileImage className="w-4 h-4 text-[#1A4A28]" />
+                Documentos de Contratos (CEM0.IM00)
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ContractPdfViewer inline />
+            </CardContent>
+          </Card>
+        )}
 
         {/* Contract detail modal */}
         {selectedContract && (
