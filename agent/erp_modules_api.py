@@ -647,6 +647,20 @@ _EXT_CONTENT_TYPE: dict[str, str] = {
     ".msg": "application/vnd.ms-outlook",
 }
 
+# Supabase config for contract document serving (Vercel-compatible)
+_SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+_SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+_STORAGE_BUCKET = "contract-documents"
+
+
+def _supabase_headers(profile: str = "tms") -> dict:
+    return {
+        "apikey": _SUPABASE_KEY,
+        "Authorization": f"Bearer {_SUPABASE_KEY}",
+        "Accept-Profile": profile,
+        "Content-Profile": profile,
+    }
+
 
 def _connect_cem0(as_dict: bool = True):
     """Connect to the CEM0 catalog on PcGraf."""
@@ -700,24 +714,101 @@ async def contract_pdf_schema(request: Request):
 
 
 async def contract_pdf_list(request: Request):
-    """GET /contracts/pdf/list — List documents from CEM0.IM00 joined with HO00 project info.
+    """GET /contracts/pdf/list — List documents.
 
-    Query params:
-        q        — free text search on NombreDocumento, FileName, Observaciones
-        proyecto — filter by CodProyecto (int)
-        ext      — filter by Extension (e.g. ".pdf")
-        limit    — max rows (default 100)
-        offset   — pagination offset
+    Primary source: Supabase tms.im00_documents (works on Vercel).
+    Fallback: direct SQL Server query (local dev only).
     """
-    if not _server:
-        return JSONResponse({"error": "PcGraf not configured"}, 500)
-
     params = request.query_params
     limit = min(int(params.get("limit", "100")), 2000)
     offset = int(params.get("offset", "0"))
     search = params.get("q", "").strip()
     proyecto = params.get("proyecto", "").strip()
     ext_filter = params.get("ext", "").strip().lower()
+
+    # ── Try Supabase first ──
+    if _SUPABASE_URL and _SUPABASE_KEY:
+        try:
+            import httpx
+            qs: dict[str, str] = {
+                "select": "id_linea,cod_proyecto,nombre_documento,extension,"
+                          "observaciones,file_name,quien_ingreso,fecha_ingreso,"
+                          "supervisor,data_size,proyecto_nombre,proyecto_cliente,storage_path",
+                "order": "id_linea.desc",
+                "limit": str(limit),
+                "offset": str(offset),
+            }
+            if search:
+                qs["or"] = (f"(nombre_documento.ilike.*{search}*,"
+                            f"file_name.ilike.*{search}*,"
+                            f"observaciones.ilike.*{search}*,"
+                            f"proyecto_nombre.ilike.*{search}*)")
+            if proyecto:
+                qs["cod_proyecto"] = f"eq.{proyecto}"
+            if ext_filter:
+                qs["extension"] = f"eq.{ext_filter}"
+
+            async with httpx.AsyncClient(timeout=15) as client:
+                # Count
+                count_qs = dict(qs)
+                count_qs.pop("limit", None)
+                count_qs.pop("offset", None)
+                count_qs.pop("order", None)
+                count_qs["select"] = "id_linea"
+                cr = await client.get(
+                    f"{_SUPABASE_URL}/rest/v1/im00_documents",
+                    headers={**_supabase_headers(), "Prefer": "count=exact"},
+                    params=count_qs,
+                )
+                total = 0
+                if cr.status_code == 200:
+                    cr_range = cr.headers.get("content-range", "")
+                    if "/" in cr_range:
+                        total = int(cr_range.split("/")[1])
+                    else:
+                        total = len(cr.json())
+
+                # Rows
+                rr = await client.get(
+                    f"{_SUPABASE_URL}/rest/v1/im00_documents",
+                    headers=_supabase_headers(),
+                    params=qs,
+                )
+                if rr.status_code == 200:
+                    rows = rr.json()
+                    # Map to frontend-expected shape
+                    docs = []
+                    for r in rows:
+                        docs.append({
+                            "IDLinea": r["id_linea"],
+                            "CodProyecto": r.get("cod_proyecto"),
+                            "nombre_documento": r.get("nombre_documento", ""),
+                            "extension": r.get("extension", ""),
+                            "Grupo": None,
+                            "observaciones": r.get("observaciones", ""),
+                            "file_name": r.get("file_name", ""),
+                            "quien_ingreso": r.get("quien_ingreso", ""),
+                            "fecha_ingreso": r.get("fecha_ingreso"),
+                            "supervisor": r.get("supervisor", ""),
+                            "data_size": r.get("data_size"),
+                            "has_file": 1 if r.get("storage_path") else 0,
+                            "proyecto_nombre": r.get("proyecto_nombre"),
+                            "proyecto_cliente": r.get("proyecto_cliente"),
+                            "proyecto_monto": None,
+                            "proyecto_estado": None,
+                        })
+                    return JSONResponse({
+                        "documents": docs,
+                        "total": total or len(docs),
+                        "offset": offset,
+                        "limit": limit,
+                    })
+        except Exception as e:
+            logger.warning(f"Supabase contract_pdf_list failed, falling back to SQL: {e}")
+
+    # ── Fallback: direct SQL Server ──
+    if not _server:
+        return JSONResponse({"error": "No data source configured"}, 500)
 
     try:
         where_parts = ["1=1"]
@@ -736,7 +827,6 @@ async def contract_pdf_list(request: Request):
             where_parts.append(f"RTRIM(LOWER(i.Extension)) = '{safe_ext}'")
         where = " AND ".join(where_parts)
 
-        # Count
         cnt = _query_cem0(
             f"SELECT COUNT(*) AS cnt FROM IM00 i "
             f"LEFT JOIN HO00 h ON h.IdLinea = i.CodProyecto "
@@ -744,7 +834,6 @@ async def contract_pdf_list(request: Request):
         )
         total = cnt[0]["cnt"] if cnt else 0
 
-        # Rows (no blob)
         rows = _query_cem0(f"""
             SELECT
                 i.IDLinea,
@@ -783,21 +872,42 @@ async def contract_pdf_list(request: Request):
 
 
 async def contract_pdf_serve(request: Request):
-    """GET /contracts/pdf/{id} — Serve the raw file blob from CEM0.IM00.
+    """GET /contracts/pdf/{id} — Serve file.
 
-    Detects content type from Extension column and file magic bytes.
+    Primary: redirect to Supabase Storage public URL.
+    Fallback: stream blob from SQL Server.
     """
-    from starlette.responses import Response
-
-    if not _server:
-        return JSONResponse({"error": "PcGraf not configured"}, 500)
+    from starlette.responses import Response, RedirectResponse
 
     doc_id = request.path_params.get("id", "").strip()
     if not doc_id:
         return JSONResponse({"error": "Document ID (IDLinea) required"}, 400)
 
+    # ── Try Supabase first ──
+    if _SUPABASE_URL and _SUPABASE_KEY:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(
+                    f"{_SUPABASE_URL}/rest/v1/im00_documents",
+                    headers=_supabase_headers(),
+                    params={"id_linea": f"eq.{doc_id}", "select": "storage_path,content_type,nombre_documento", "limit": "1"},
+                )
+                if r.status_code == 200 and r.json():
+                    row = r.json()[0]
+                    path = row.get("storage_path", "")
+                    if path:
+                        # Public URL for the bucket
+                        url = f"{_SUPABASE_URL}/storage/v1/object/public/{_STORAGE_BUCKET}/{path}"
+                        return RedirectResponse(url=url, status_code=302)
+        except Exception as e:
+            logger.warning(f"Supabase serve failed, falling back to SQL: {e}")
+
+    # ── Fallback: direct SQL Server ──
+    if not _server:
+        return JSONResponse({"error": "No data source configured"}, 500)
+
     try:
-        # Fetch blob + extension using raw cursor (not as_dict) for binary fidelity
         import pymssql
         conn = pymssql.connect(
             server=_server,
@@ -825,7 +935,6 @@ async def contract_pdf_serve(request: Request):
         ext = (row[1] or "").strip().lower()
         nombre = (row[2] or f"document_{doc_id}").strip()
 
-        # Determine content type: prefer Extension column, fallback to magic bytes
         content_type = _EXT_CONTENT_TYPE.get(ext, "")
         if not content_type:
             if file_bytes[:4] == b'%PDF':
@@ -839,7 +948,6 @@ async def contract_pdf_serve(request: Request):
             else:
                 content_type = "application/octet-stream"
 
-        # Build safe filename
         safe_name = nombre
         if ext and not safe_name.lower().endswith(ext):
             safe_name = f"{safe_name}{ext}"
@@ -903,49 +1011,96 @@ TEXTO DEL CONTRATO:
 
 
 async def contract_pdf_extract(request: Request) -> JSONResponse:
-    """GET /contracts/pdf/{id}/extract — Extract and analyze contract PDF text using AI."""
+    """GET /contracts/pdf/{id}/extract — Extract and analyze contract PDF text using AI.
 
-    if not _server:
-        return JSONResponse({"error": "PcGraf not configured"}, 500)
+    Primary: download PDF from Supabase Storage.
+    Fallback: fetch blob from SQL Server.
+    """
+    import httpx
 
     doc_id = request.path_params.get("id", "").strip()
     if not doc_id:
         return JSONResponse({"error": "Document ID (IDLinea) required"}, 400)
 
     try:
-        import pymssql
+        file_bytes = None
+        ext = ""
+        nombre = f"doc_{doc_id}"
+        cod_proyecto = None
+        proyecto_nombre = ""
+        cliente = ""
 
-        # 1. Fetch the PDF blob
-        conn = pymssql.connect(
-            server=_server, user=_user, password=_password,
-            database="CEM0", login_timeout=10, timeout=120,
-        )
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT [Data], RTRIM([Extension]) AS ext, "
-                "RTRIM([NombreDocumento]) AS nombre, "
-                "i.CodProyecto, RTRIM(h.Descripcion) AS proyecto, "
-                "RTRIM(h.CodCliente) AS cliente "
-                "FROM IM00 i LEFT JOIN HO00 h ON h.IdLinea = i.CodProyecto "
-                "WHERE i.IDLinea = %s",
-                (int(doc_id),),
-            )
-            row = cursor.fetchone()
-        finally:
-            conn.close()
+        # ── Try Supabase first ──
+        if _SUPABASE_URL and _SUPABASE_KEY:
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    # Get metadata + storage path
+                    r = await client.get(
+                        f"{_SUPABASE_URL}/rest/v1/im00_documents",
+                        headers=_supabase_headers(),
+                        params={
+                            "id_linea": f"eq.{doc_id}",
+                            "select": "storage_path,extension,nombre_documento,cod_proyecto,proyecto_nombre,proyecto_cliente",
+                            "limit": "1",
+                        },
+                    )
+                    if r.status_code == 200 and r.json():
+                        meta = r.json()[0]
+                        path = meta.get("storage_path", "")
+                        ext = (meta.get("extension") or "").strip().lower()
+                        nombre = meta.get("nombre_documento") or nombre
+                        cod_proyecto = meta.get("cod_proyecto")
+                        proyecto_nombre = meta.get("proyecto_nombre") or ""
+                        cliente = meta.get("proyecto_cliente") or ""
 
-        if not row or not row[0]:
+                        if path:
+                            # Download from Storage
+                            dl = await client.get(
+                                f"{_SUPABASE_URL}/storage/v1/object/public/{_STORAGE_BUCKET}/{path}",
+                                timeout=60,
+                            )
+                            if dl.status_code == 200:
+                                file_bytes = dl.content
+            except Exception as e:
+                logger.warning(f"Supabase extract fetch failed, trying SQL: {e}")
+
+        # ── Fallback: SQL Server ──
+        if file_bytes is None and _server:
+            try:
+                import pymssql
+                conn = pymssql.connect(
+                    server=_server, user=_user, password=_password,
+                    database="CEM0", login_timeout=10, timeout=120,
+                )
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT [Data], RTRIM([Extension]) AS ext, "
+                        "RTRIM([NombreDocumento]) AS nombre, "
+                        "i.CodProyecto, RTRIM(h.Descripcion) AS proyecto, "
+                        "RTRIM(h.CodCliente) AS cliente "
+                        "FROM IM00 i LEFT JOIN HO00 h ON h.IdLinea = i.CodProyecto "
+                        "WHERE i.IDLinea = %s",
+                        (int(doc_id),),
+                    )
+                    row = cursor.fetchone()
+                finally:
+                    conn.close()
+
+                if row and row[0]:
+                    file_bytes = bytes(row[0])
+                    ext = (row[1] or "").strip().lower()
+                    nombre = (row[2] or nombre).strip()
+                    cod_proyecto = row[3]
+                    proyecto_nombre = (row[4] or "").strip()
+                    cliente = (row[5] or "").strip()
+            except Exception as e:
+                logger.warning(f"SQL fallback for extract also failed: {e}")
+
+        if not file_bytes:
             return JSONResponse({"error": f"No file data for document {doc_id}"}, 404)
 
-        file_bytes = bytes(row[0])
-        ext = (row[1] or "").strip().lower()
-        nombre = (row[2] or f"doc_{doc_id}").strip()
-        cod_proyecto = row[3]
-        proyecto_nombre = (row[4] or "").strip()
-        cliente = (row[5] or "").strip()
-
-        # 2. Extract text from PDF using PyMuPDF
+        # 2. Validate it's a PDF
         if ext not in (".pdf",) and not file_bytes[:4] == b'%PDF':
             return JSONResponse({
                 "error": f"Solo se pueden analizar documentos PDF. Este archivo es {ext}",
@@ -953,14 +1108,16 @@ async def contract_pdf_extract(request: Request) -> JSONResponse:
                 "nombre": nombre,
             }, 400)
 
+        # 3. Extract text from PDF using PyMuPDF
         import fitz  # PyMuPDF
         pdf_doc = fitz.open(stream=file_bytes, filetype="pdf")
         pages_text = []
-        for page_num in range(min(pdf_doc.page_count, 20)):  # Limit to first 20 pages
+        for page_num in range(min(pdf_doc.page_count, 20)):
             page = pdf_doc[page_num]
             text = page.get_text("text")
             if text.strip():
                 pages_text.append(f"--- Página {page_num + 1} ---\n{text}")
+        total_pages = pdf_doc.page_count
         pdf_doc.close()
 
         full_text = "\n\n".join(pages_text)
@@ -971,7 +1128,7 @@ async def contract_pdf_extract(request: Request) -> JSONResponse:
                 "nombre": nombre,
                 "proyecto": proyecto_nombre,
                 "cliente": cliente,
-                "pages": pdf_doc.page_count if 'pdf_doc' in dir() else 0,
+                "pages": total_pages,
                 "error": "No se pudo extraer texto del PDF (posiblemente es una imagen escaneada)",
                 "raw_text": "",
                 "analysis": None,
@@ -981,9 +1138,7 @@ async def contract_pdf_extract(request: Request) -> JSONResponse:
         if len(full_text) > 12000:
             full_text = full_text[:12000] + "\n\n[... texto truncado ...]"
 
-        # 3. Call LLM for analysis
-        import httpx
-
+        # 4. Call LLM for analysis
         openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
         analysis = None
         llm_error = None
@@ -1033,7 +1188,7 @@ async def contract_pdf_extract(request: Request) -> JSONResponse:
             "cliente": cliente,
             "pages": len(pages_text),
             "text_length": len(full_text),
-            "raw_text": full_text[:3000],  # Return first 3K chars for preview
+            "raw_text": full_text[:3000],
             "analysis": analysis,
             "llm_error": llm_error,
         })
