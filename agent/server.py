@@ -49,7 +49,7 @@ from agent.erp_modules_api import (
     erp_facturas, erp_factura_detalle, erp_facturas_por_negocio,
     erp_facturas_mensual, erp_facturas_kpis, erp_top_clientes,
     erp_contratos, erp_contrato_detalle, erp_hitos, erp_table_schema,
-    contract_pdf_schema, contract_pdf_list, contract_pdf_serve,
+    contract_pdf_schema, contract_pdf_list, contract_pdf_serve, contract_pdf_extract,
 )
 from agent.tms_engine import (
     tms_list_entities, tms_query, tms_get_one, tms_create, tms_update,
@@ -1414,6 +1414,7 @@ routes = [
     # Contract PDF Viewer (CEM0.IM00)
     Route("/contracts/pdf/schema", contract_pdf_schema, methods=["GET"]),
     Route("/contracts/pdf/list", contract_pdf_list, methods=["GET"]),
+    Route("/contracts/pdf/{id}/extract", contract_pdf_extract, methods=["GET"]),
     Route("/contracts/pdf/{id}", contract_pdf_serve, methods=["GET"]),
     # ── TMS Phase 2: Core Module Analytics ──
     Route("/tms/cash/position", cash_position, methods=["GET"]),

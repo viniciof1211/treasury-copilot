@@ -856,3 +856,188 @@ async def contract_pdf_serve(request: Request):
     except Exception as e:
         logger.error(f"contract_pdf_serve error: {e}")
         return JSONResponse({"error": str(e)}, 500)
+
+
+# ---------------------------------------------------------------------------
+# CONTRACT PDF EXTRACTION — AI-powered contract analysis
+# ---------------------------------------------------------------------------
+
+_EXTRACT_PROMPT = """Eres un analista experto en contratos de construcción y proyectos de ingeniería.
+Analiza el siguiente texto extraído de un PDF de contrato y extrae la información estructurada.
+
+Responde SOLO en JSON válido con esta estructura exacta (sin markdown, sin ```json):
+{
+  "resumen": "Resumen ejecutivo del contrato en 2-3 oraciones",
+  "tipo_contrato": "Tipo de contrato (ej: Orden de Compra, Contrato de Servicios, Cotización, etc.)",
+  "partes": {
+    "contratante": "Nombre del cliente/contratante",
+    "contratista": "Nombre del contratista/proveedor",
+    "contacto": "Persona de contacto si se menciona"
+  },
+  "terminos": [
+    {"titulo": "Nombre del término", "descripcion": "Detalle del término"}
+  ],
+  "productos_servicios": [
+    {"item": "Nombre del producto/servicio", "descripcion": "Detalle", "cantidad": "Cantidad si aplica", "unidad": "Unidad de medida", "precio_unitario": "Precio unitario si aplica", "subtotal": "Subtotal si aplica"}
+  ],
+  "montos": {
+    "subtotal": "Subtotal antes de impuestos",
+    "impuestos": "Monto de impuestos",
+    "total": "Monto total del contrato",
+    "moneda": "Moneda (CRC, USD, etc.)",
+    "forma_pago": "Condiciones de pago"
+  },
+  "fechas": {
+    "emision": "Fecha de emisión",
+    "vigencia": "Fecha de vigencia/vencimiento",
+    "entrega": "Fecha de entrega si aplica"
+  },
+  "observaciones": ["Notas adicionales relevantes"]
+}
+
+Si algún campo no está disponible en el texto, usa null.
+Extrae TODOS los items/productos/servicios que encuentres con el mayor detalle posible.
+
+TEXTO DEL CONTRATO:
+"""
+
+
+async def contract_pdf_extract(request: Request) -> JSONResponse:
+    """GET /contracts/pdf/{id}/extract — Extract and analyze contract PDF text using AI."""
+
+    if not _server:
+        return JSONResponse({"error": "PcGraf not configured"}, 500)
+
+    doc_id = request.path_params.get("id", "").strip()
+    if not doc_id:
+        return JSONResponse({"error": "Document ID (IDLinea) required"}, 400)
+
+    try:
+        import pymssql
+
+        # 1. Fetch the PDF blob
+        conn = pymssql.connect(
+            server=_server, user=_user, password=_password,
+            database="CEM0", login_timeout=10, timeout=120,
+        )
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT [Data], RTRIM([Extension]) AS ext, "
+                "RTRIM([NombreDocumento]) AS nombre, "
+                "i.CodProyecto, RTRIM(h.Descripcion) AS proyecto, "
+                "RTRIM(h.CodCliente) AS cliente "
+                "FROM IM00 i LEFT JOIN HO00 h ON h.IdLinea = i.CodProyecto "
+                "WHERE i.IDLinea = %s",
+                (int(doc_id),),
+            )
+            row = cursor.fetchone()
+        finally:
+            conn.close()
+
+        if not row or not row[0]:
+            return JSONResponse({"error": f"No file data for document {doc_id}"}, 404)
+
+        file_bytes = bytes(row[0])
+        ext = (row[1] or "").strip().lower()
+        nombre = (row[2] or f"doc_{doc_id}").strip()
+        cod_proyecto = row[3]
+        proyecto_nombre = (row[4] or "").strip()
+        cliente = (row[5] or "").strip()
+
+        # 2. Extract text from PDF using PyMuPDF
+        if ext not in (".pdf",) and not file_bytes[:4] == b'%PDF':
+            return JSONResponse({
+                "error": f"Solo se pueden analizar documentos PDF. Este archivo es {ext}",
+                "doc_id": int(doc_id),
+                "nombre": nombre,
+            }, 400)
+
+        import fitz  # PyMuPDF
+        pdf_doc = fitz.open(stream=file_bytes, filetype="pdf")
+        pages_text = []
+        for page_num in range(min(pdf_doc.page_count, 20)):  # Limit to first 20 pages
+            page = pdf_doc[page_num]
+            text = page.get_text("text")
+            if text.strip():
+                pages_text.append(f"--- Página {page_num + 1} ---\n{text}")
+        pdf_doc.close()
+
+        full_text = "\n\n".join(pages_text)
+
+        if not full_text.strip():
+            return JSONResponse({
+                "doc_id": int(doc_id),
+                "nombre": nombre,
+                "proyecto": proyecto_nombre,
+                "cliente": cliente,
+                "pages": pdf_doc.page_count if 'pdf_doc' in dir() else 0,
+                "error": "No se pudo extraer texto del PDF (posiblemente es una imagen escaneada)",
+                "raw_text": "",
+                "analysis": None,
+            })
+
+        # Truncate text to ~12K chars to fit in LLM context
+        if len(full_text) > 12000:
+            full_text = full_text[:12000] + "\n\n[... texto truncado ...]"
+
+        # 3. Call LLM for analysis
+        import httpx
+
+        openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
+        analysis = None
+        llm_error = None
+
+        if openrouter_key:
+            try:
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {openrouter_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": "google/gemini-2.0-flash-001",
+                            "messages": [
+                                {"role": "system", "content": "Eres un analista de contratos. Responde SOLO en JSON válido."},
+                                {"role": "user", "content": _EXTRACT_PROMPT + full_text},
+                            ],
+                            "temperature": 0.1,
+                            "max_tokens": 4000,
+                        },
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        content = data["choices"][0]["message"]["content"]
+                        # Strip markdown fences if present
+                        content = content.strip()
+                        if content.startswith("```"):
+                            content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+                        if content.endswith("```"):
+                            content = content[:-3]
+                        content = content.strip()
+                        import json as _json
+                        analysis = _json.loads(content)
+                    else:
+                        llm_error = f"LLM returned {resp.status_code}: {resp.text[:200]}"
+            except Exception as e:
+                llm_error = f"LLM analysis failed: {str(e)}"
+                logger.warning(f"contract_pdf_extract LLM error: {e}")
+
+        return JSONResponse({
+            "doc_id": int(doc_id),
+            "nombre": nombre,
+            "proyecto": proyecto_nombre,
+            "proyecto_id": cod_proyecto,
+            "cliente": cliente,
+            "pages": len(pages_text),
+            "text_length": len(full_text),
+            "raw_text": full_text[:3000],  # Return first 3K chars for preview
+            "analysis": analysis,
+            "llm_error": llm_error,
+        })
+
+    except Exception as e:
+        logger.error(f"contract_pdf_extract error: {e}")
+        return JSONResponse({"error": str(e)}, 500)

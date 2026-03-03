@@ -1014,3 +1014,29 @@ export async function fetchContractDocuments(
 export function getContractDocUrl(docId: number): string {
   return `${BASE}/contracts/pdf/${docId}`;
 }
+
+export interface ContractExtraction {
+  doc_id: number;
+  nombre: string;
+  proyecto: string;
+  proyecto_id: number | null;
+  cliente: string;
+  pages: number;
+  text_length: number;
+  raw_text: string;
+  llm_error: string | null;
+  analysis: {
+    resumen: string | null;
+    tipo_contrato: string | null;
+    partes: { contratante: string | null; contratista: string | null; contacto: string | null } | null;
+    terminos: { titulo: string; descripcion: string }[] | null;
+    productos_servicios: { item: string; descripcion: string; cantidad: string | null; unidad: string | null; precio_unitario: string | null; subtotal: string | null }[] | null;
+    montos: { subtotal: string | null; impuestos: string | null; total: string | null; moneda: string | null; forma_pago: string | null } | null;
+    fechas: { emision: string | null; vigencia: string | null; entrega: string | null } | null;
+    observaciones: string[] | null;
+  } | null;
+}
+
+export async function fetchContractExtraction(docId: number): Promise<ContractExtraction> {
+  return api(`/contracts/pdf/${docId}/extract`, { headers: headers('admin') });
+}
