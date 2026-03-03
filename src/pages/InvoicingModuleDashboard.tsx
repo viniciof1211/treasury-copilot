@@ -15,8 +15,9 @@ import {
 } from 'recharts';
 import {
   FileText, Building2, Target, Calendar, AlertTriangle,
-  RefreshCw, Plus, Eye,
+  RefreshCw, Plus, Eye, FileImage,
 } from 'lucide-react';
+import { ContractPdfViewer } from '../components/ContractPdfViewer';
 
 const tooltipStyle = { backgroundColor: 'white', border: '1px solid #e5e7eb', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', fontSize: '12px' };
 const PIE_COLORS = [ARA_COLORS.primary, ARA_COLORS.gold, ARA_COLORS.blue, ARA_COLORS.red, ARA_COLORS.orange, '#8B5CF6', ARA_COLORS.gray];
@@ -25,8 +26,9 @@ export function InvoicingModuleDashboard() {
   const [dashboard, setDashboard] = useState<InvoicingDashboardData | null>(null);
   const [contratos, setContratos] = useState<Contrato[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'contratos' | 'hitos'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'contratos' | 'hitos' | 'documentos'>('overview');
   const [selectedContract, setSelectedContract] = useState<string | null>(null);
+  const [pdfViewDocId, setPdfViewDocId] = useState<number | null>(null);
   const [contractDetail, setContractDetail] = useState<{ contrato: Record<string, unknown>; hitos: Record<string, unknown>[] } | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [createData, setCreateData] = useState<Record<string, string>>({});
@@ -109,6 +111,7 @@ export function InvoicingModuleDashboard() {
             { id: 'overview' as const, label: 'Resumen', icon: Target },
             { id: 'contratos' as const, label: 'Contratos', icon: FileText },
             { id: 'hitos' as const, label: 'Hitos Próximos', icon: Calendar },
+            { id: 'documentos' as const, label: 'Documentos PDF', icon: FileImage },
           ]).map(t => {
             const Icon = t.icon;
             return (
@@ -290,7 +293,7 @@ export function InvoicingModuleDashboard() {
                           <td className="py-2 px-3 text-green-700">{formatCurrency(c.monto_cobrado || 0)}</td>
                           <td className="py-2 px-3">{estadoBadge(c.estado)}</td>
                           <td className="py-2 px-3">
-                            <button onClick={() => loadContractDetail(c.id)} className="p-1 text-gray-400 hover:text-[#1A4A28] hover:bg-green-50 rounded">
+                            <button onClick={() => loadContractDetail(c.id)} className="p-1 text-gray-400 hover:text-[#1A4A28] hover:bg-green-50 rounded" title="Ver detalle">
                               <Eye className="w-4 h-4" />
                             </button>
                           </td>
@@ -397,6 +400,26 @@ export function InvoicingModuleDashboard() {
               )}
             </CardContent>
           </Card>
+        )}
+
+        {/* Documentos PDF Tab */}
+        {activeTab === 'documentos' && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <FileImage className="w-4 h-4 text-[#1A4A28]" />
+                Documentos de Contratos (CEM0.IM00)
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ContractPdfViewer inline />
+            </CardContent>
+          </Card>
+        )}
+
+        {/* PDF Viewer Modal (triggered from document browser) */}
+        {pdfViewDocId != null && (
+          <ContractPdfViewer docId={pdfViewDocId} onClose={() => setPdfViewDocId(null)} />
         )}
       </div>
     </div>

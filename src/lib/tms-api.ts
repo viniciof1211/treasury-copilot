@@ -972,3 +972,45 @@ export async function fetchSyncSchedules(): Promise<{ schedules: SyncSchedule[] 
 export async function updateSyncSchedule(integration: string, enabled?: boolean, interval_minutes?: number): Promise<{ status: string; integration: string }> {
   return api('/tms/sync/schedule', { method: 'POST', headers: headers('admin'), body: JSON.stringify({ integration, enabled, interval_minutes }) });
 }
+
+// ─── Contract Document Viewer (CEM0.dbo.IM00) ──────────────────────────────
+
+export interface ContractDocument {
+  IDLinea: number;
+  CodProyecto: number | null;
+  nombre_documento: string;
+  extension: string;
+  Grupo: number | null;
+  observaciones: string;
+  file_name: string;
+  quien_ingreso: string;
+  fecha_ingreso: string;
+  supervisor: string;
+  data_size: number | null;
+  has_file: number;
+  proyecto_nombre: string | null;
+  proyecto_cliente: string | null;
+  proyecto_monto: number | null;
+  proyecto_estado: number | null;
+}
+
+export interface ContractDocListResponse {
+  documents: ContractDocument[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export async function fetchContractDocuments(
+  search = '', proyecto = '', ext = '', limit = 100, offset = 0,
+): Promise<ContractDocListResponse> {
+  const qs = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (search) qs.set('q', search);
+  if (proyecto) qs.set('proyecto', proyecto);
+  if (ext) qs.set('ext', ext);
+  return api(`/contracts/pdf/list?${qs}`, { headers: headers('admin') });
+}
+
+export function getContractDocUrl(docId: number): string {
+  return `${BASE}/contracts/pdf/${docId}`;
+}
