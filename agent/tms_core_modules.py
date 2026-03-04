@@ -28,6 +28,15 @@ from starlette.responses import JSONResponse
 
 from agent.tms_engine import _supabase, ENTITY_CONFIG, ROLE_PERMISSIONS, check_permission, AuthorizationError, _json_serial
 
+# Import projects_api for M5/M6 fallback (Excel-based contract data)
+try:
+    from agent.projects_api import _parse_contracts_main as _excel_contracts, _build_milestone_alerts as _excel_alerts, _build_area_breakdown as _excel_area_breakdown, _build_weekly_forecast as _excel_forecast
+except ImportError:
+    _excel_contracts = None
+    _excel_alerts = None
+    _excel_area_breakdown = None
+    _excel_forecast = None
+
 logger = logging.getLogger("tms_core_modules")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
@@ -58,6 +67,26 @@ def _to_float(v: Any) -> float:
     return float(v)
 
 
+async def _sf_query(table: str, params: Optional[dict] = None, limit: int = 2000) -> list[dict]:
+    """Query silver_finance tables via PostgREST when tms.* tables are empty."""
+    import httpx
+    async with httpx.AsyncClient(timeout=20) as client:
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Accept-Profile": "silver_finance",
+        }
+        p: dict[str, str] = {"select": "*", "limit": str(limit)}
+        if params:
+            p.update(params)
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/{table}",
+            headers=headers,
+            params=p,
+        )
+        return resp.json() if resp.status_code == 200 else []
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # M1: CASH MANAGEMENT
 # ═════════════════════════════════════════════════════════════════════════════
@@ -73,40 +102,82 @@ async def cash_position(request: Request) -> JSONResponse:
     try:
         empresa = request.query_params.get("empresa")
 
-        # Aggregate from cashflow_forecast (most recent actual entries)
+        # Try TMS table first
         filters: dict = {"status": "ejecutado"}
         if empresa:
             filters["empresa"] = empresa
-
         rows = await _supabase.select(
-            "tms.cashflow_forecast",
-            filters=filters,
-            order="semana_inicio.desc",
-            limit=500,
+            "tms.cashflow_forecast", filters=filters, order="semana_inicio.desc", limit=500,
         )
 
-        # Build position by empresa
-        positions: dict[str, dict] = {}
-        for r in rows:
-            emp = r.get("empresa", "Sin empresa")
-            if emp not in positions:
-                positions[emp] = {
-                    "empresa": emp,
-                    "total_ingresos": 0, "total_egresos": 0,
-                    "flujo_neto": 0, "saldo_acumulado": 0,
-                    "moneda": r.get("moneda", "USD"),
-                    "semanas": 0,
-                    "ultima_semana": r.get("semana_inicio"),
-                }
-            pos = positions[emp]
-            pos["total_ingresos"] += _to_float(r.get("ingresos"))
-            pos["total_egresos"] += _to_float(r.get("egresos"))
-            pos["flujo_neto"] += _to_float(r.get("flujo_neto"))
-            pos["semanas"] += 1
-            if r.get("saldo_acumulado"):
-                pos["saldo_acumulado"] = _to_float(r["saldo_acumulado"])
+        # ── Fallback to silver_finance when TMS table is empty ──
+        if not rows:
+            # Inflows = cxc_items (receivables)
+            cxc_params: dict[str, str] = {"order": "vencimiento.desc", "limit": "2000"}
+            if empresa:
+                cxc_params["empresa"] = f"eq.{empresa}"
+            cxc = await _sf_query("cxc_items", cxc_params)
 
-        result = list(positions.values())
+            # Outflows = cxp_items (payables)
+            cxp_params: dict[str, str] = {"order": "vencimiento_fecha.desc", "limit": "2000"}
+            if empresa:
+                cxp_params["empresa"] = f"eq.{empresa}"
+            cxp = await _sf_query("cxp_items", cxp_params)
+
+            # Debt service = flujo_semanal (loan cuotas = additional outflows)
+            flujo_params: dict[str, str] = {"order": "vencimiento.desc", "limit": "2000"}
+            if empresa:
+                flujo_params["compania"] = f"eq.{empresa}"
+            flujo = await _sf_query("flujo_semanal", flujo_params)
+
+            # Build position grouped by BU
+            positions: dict[str, dict] = {}
+            for r in cxc:
+                emp = r.get("empresa", "Sin empresa") or "Sin empresa"
+                if emp not in positions:
+                    positions[emp] = {"empresa": emp, "total_ingresos": 0, "total_egresos": 0,
+                                      "flujo_neto": 0, "saldo_acumulado": 0, "moneda": "USD", "semanas": 0,
+                                      "ultima_semana": r.get("vencimiento")}
+                positions[emp]["total_ingresos"] += _to_float(r.get("monto"))
+                positions[emp]["semanas"] += 1
+            for r in cxp:
+                emp = r.get("empresa", "Sin empresa") or "Sin empresa"
+                if emp not in positions:
+                    positions[emp] = {"empresa": emp, "total_ingresos": 0, "total_egresos": 0,
+                                      "flujo_neto": 0, "saldo_acumulado": 0, "moneda": "USD", "semanas": 0,
+                                      "ultima_semana": None}
+                positions[emp]["total_egresos"] += _to_float(r.get("monto_usd"))
+            for r in flujo:
+                emp = r.get("compania", "Sin empresa") or "Sin empresa"
+                if emp not in positions:
+                    positions[emp] = {"empresa": emp, "total_ingresos": 0, "total_egresos": 0,
+                                      "flujo_neto": 0, "saldo_acumulado": 0, "moneda": "USD", "semanas": 0,
+                                      "ultima_semana": None}
+                positions[emp]["total_egresos"] += _to_float(r.get("cuota"))
+            for p in positions.values():
+                p["flujo_neto"] = p["total_ingresos"] - p["total_egresos"]
+                p["saldo_acumulado"] = p["flujo_neto"]
+
+            result = list(positions.values())
+        else:
+            # Original TMS-based aggregation
+            positions_tms: dict[str, dict] = {}
+            for r in rows:
+                emp = r.get("empresa", "Sin empresa")
+                if emp not in positions_tms:
+                    positions_tms[emp] = {"empresa": emp, "total_ingresos": 0, "total_egresos": 0,
+                                          "flujo_neto": 0, "saldo_acumulado": 0,
+                                          "moneda": r.get("moneda", "USD"), "semanas": 0,
+                                          "ultima_semana": r.get("semana_inicio")}
+                pos = positions_tms[emp]
+                pos["total_ingresos"] += _to_float(r.get("ingresos"))
+                pos["total_egresos"] += _to_float(r.get("egresos"))
+                pos["flujo_neto"] += _to_float(r.get("flujo_neto"))
+                pos["semanas"] += 1
+                if r.get("saldo_acumulado"):
+                    pos["saldo_acumulado"] = _to_float(r["saldo_acumulado"])
+            result = list(positions_tms.values())
+
         grand_total = {
             "empresa": "CONSOLIDADO",
             "total_ingresos": sum(p["total_ingresos"] for p in result),
@@ -147,40 +218,100 @@ async def cash_forecast(request: Request) -> JSONResponse:
             filters["scenario_id"] = scenario_id
 
         rows = await _supabase.select(
-            "tms.cashflow_forecast",
-            filters=filters,
-            order="semana_inicio.asc",
-            limit=weeks * 5,  # up to 5 empresas
+            "tms.cashflow_forecast", filters=filters, order="semana_inicio.asc", limit=weeks * 5,
         )
 
-        # Group by week
-        weekly: dict[str, dict] = {}
-        for r in rows:
-            week = r.get("semana_inicio", "")
-            if not week:
-                continue
-            if week not in weekly:
-                weekly[week] = {
-                    "semana": week,
-                    "ingresos_ejecutado": 0, "egresos_ejecutado": 0,
-                    "ingresos_proyectado": 0, "egresos_proyectado": 0,
-                    "flujo_neto": 0, "saldo_acumulado": 0,
-                }
-            w = weekly[week]
-            status = r.get("status", "proyectado")
-            ing = _to_float(r.get("ingresos"))
-            egr = _to_float(r.get("egresos"))
-            if status == "ejecutado":
-                w["ingresos_ejecutado"] += ing
-                w["egresos_ejecutado"] += egr
-            else:
-                w["ingresos_proyectado"] += ing
-                w["egresos_proyectado"] += egr
-            w["flujo_neto"] += _to_float(r.get("flujo_neto"))
-            if r.get("saldo_acumulado"):
-                w["saldo_acumulado"] = _to_float(r["saldo_acumulado"])
+        # ── Fallback to silver_finance when TMS table is empty ──
+        if not rows:
+            # Inflows = cxc_items (receivables)
+            cxc_params: dict[str, str] = {"order": "vencimiento.asc", "limit": "2000"}
+            if empresa:
+                cxc_params["empresa"] = f"eq.{empresa}"
+            cxc = await _sf_query("cxc_items", cxc_params)
 
-        result = sorted(weekly.values(), key=lambda x: x["semana"])[:weeks]
+            # Outflows = cxp_items (payables)
+            cxp_params: dict[str, str] = {"order": "vencimiento_fecha.asc", "limit": "2000"}
+            if empresa:
+                cxp_params["empresa"] = f"eq.{empresa}"
+            cxp = await _sf_query("cxp_items", cxp_params)
+
+            # Debt service = flujo_semanal (loan cuotas)
+            flujo_params: dict[str, str] = {"order": "semana_inicio.asc", "limit": "2000"}
+            if empresa:
+                flujo_params["compania"] = f"eq.{empresa}"
+            flujo = await _sf_query("flujo_semanal", flujo_params)
+
+            weekly: dict[str, dict] = {}
+
+            def _week_key(fecha_str: str) -> str:
+                """Convert a date string to its Monday week key."""
+                try:
+                    dt = datetime.fromisoformat(fecha_str.replace("Z", "+00:00")) if "T" in fecha_str else datetime.strptime(fecha_str[:10], "%Y-%m-%d")
+                    return (dt - timedelta(days=dt.weekday())).strftime("%Y-%m-%d")
+                except (ValueError, TypeError):
+                    return ""
+
+            def _ensure_week(wk: str) -> None:
+                if wk and wk not in weekly:
+                    weekly[wk] = {"semana": wk, "ingresos_ejecutado": 0, "egresos_ejecutado": 0,
+                                  "ingresos_proyectado": 0, "egresos_proyectado": 0,
+                                  "flujo_neto": 0, "saldo_acumulado": 0}
+
+            # cxc_items → ingresos (by vencimiento week)
+            for r in cxc:
+                wk = _week_key(r.get("vencimiento", ""))
+                _ensure_week(wk)
+                if wk:
+                    weekly[wk]["ingresos_ejecutado"] += _to_float(r.get("monto"))
+
+            # cxp_items → egresos (by vencimiento_fecha week)
+            for r in cxp:
+                wk = _week_key(r.get("vencimiento_fecha", ""))
+                _ensure_week(wk)
+                if wk:
+                    weekly[wk]["egresos_ejecutado"] += _to_float(r.get("monto_usd"))
+
+            # flujo_semanal → egresos debt service (by semana_inicio)
+            for r in flujo:
+                wk = r.get("semana_inicio", "")
+                _ensure_week(wk)
+                if wk:
+                    weekly[wk]["egresos_ejecutado"] += _to_float(r.get("cuota"))
+
+            # Compute net and cumulative
+            sorted_weeks = sorted(weekly.values(), key=lambda x: x["semana"])
+            cumulative = 0.0
+            for w in sorted_weeks:
+                w["flujo_neto"] = (w["ingresos_ejecutado"] + w["ingresos_proyectado"]) - (w["egresos_ejecutado"] + w["egresos_proyectado"])
+                cumulative += w["flujo_neto"]
+                w["saldo_acumulado"] = round(cumulative, 2)
+
+            result = sorted_weeks[:weeks]
+        else:
+            # Original TMS-based aggregation
+            weekly_tms: dict[str, dict] = {}
+            for r in rows:
+                week = r.get("semana_inicio", "")
+                if not week:
+                    continue
+                if week not in weekly_tms:
+                    weekly_tms[week] = {"semana": week, "ingresos_ejecutado": 0, "egresos_ejecutado": 0,
+                                        "ingresos_proyectado": 0, "egresos_proyectado": 0,
+                                        "flujo_neto": 0, "saldo_acumulado": 0}
+                w = weekly_tms[week]
+                status = r.get("status", "proyectado")
+                ing = _to_float(r.get("ingresos"))
+                egr = _to_float(r.get("egresos"))
+                if status == "ejecutado":
+                    w["ingresos_ejecutado"] += ing
+                    w["egresos_ejecutado"] += egr
+                else:
+                    w["ingresos_proyectado"] += ing
+                    w["egresos_proyectado"] += egr
+                w["flujo_neto"] += _to_float(r.get("flujo_neto"))
+                if r.get("saldo_acumulado"):
+                    w["saldo_acumulado"] = _to_float(r["saldo_acumulado"])
+            result = sorted(weekly_tms.values(), key=lambda x: x["semana"])[:weeks]
 
         return JSONResponse({"forecast": result, "weeks": len(result)})
     except Exception as e:
@@ -205,51 +336,77 @@ async def cash_liquidity_gap(request: Request) -> JSONResponse:
 
         # Get payment instructions as outflows
         payments = await _supabase.select(
-            "tms.payment_instructions",
-            filters={"estado": f"neq.pagado"},
-            limit=1000,
+            "tms.payment_instructions", filters={"estado": f"neq.pagado"}, limit=1000,
         )
-
         # Get cashflow_forecast entries as inflows/outflows
         forecasts = await _supabase.select(
-            "tms.cashflow_forecast",
-            filters={"status": "proyectado"},
-            order="semana_inicio.asc",
-            limit=500,
+            "tms.cashflow_forecast", filters={"status": "proyectado"}, order="semana_inicio.asc", limit=500,
         )
+
+        # ── Fallback to silver_finance when TMS tables are empty ──
+        use_sf = not payments and not forecasts
+        sf_cxc: list[dict] = []
+        sf_cxp: list[dict] = []
+        sf_flujo: list[dict] = []
+        if use_sf:
+            sf_cxc = await _sf_query("cxc_items", {"order": "vencimiento.asc", "limit": "2000"})
+            sf_cxp = await _sf_query("cxp_items", {"order": "vencimiento_fecha.asc", "limit": "2000"})
+            sf_flujo = await _sf_query("flujo_semanal", {"order": "vencimiento.asc", "limit": "2000"})
+
+        def _date_diff(fecha_str: str) -> int | None:
+            if not fecha_str:
+                return None
+            try:
+                dt = datetime.fromisoformat(fecha_str.replace("Z", "+00:00")) if "T" in fecha_str else datetime.strptime(fecha_str[:10], "%Y-%m-%d")
+                return (dt.date() - today).days if hasattr(dt, 'date') else (dt - today).days
+            except (ValueError, TypeError, AttributeError):
+                return None
 
         # Build buckets
         buckets = []
         prev_days = 0
         for label, max_days in buckets_def:
-            bucket = {
-                "bucket": label, "max_days": max_days,
-                "inflows": 0, "outflows": 0, "gap": 0,
-            }
+            bucket = {"bucket": label, "max_days": max_days, "inflows": 0, "outflows": 0, "gap": 0}
 
-            for f in forecasts:
-                week = f.get("semana_inicio", "")
-                if not week:
-                    continue
-                try:
-                    diff = (datetime.fromisoformat(week).date() - today).days
-                except (ValueError, TypeError):
-                    continue
-                if prev_days <= diff < max_days:
-                    bucket["inflows"] += _to_float(f.get("ingresos"))
-                    bucket["outflows"] += _to_float(f.get("egresos"))
+            if use_sf:
+                # Inflows from cxc_items (receivables)
+                for r in sf_cxc:
+                    diff = _date_diff(r.get("vencimiento", ""))
+                    if diff is not None and prev_days <= diff < max_days:
+                        bucket["inflows"] += _to_float(r.get("monto"))
+                # Outflows from cxp_items (payables)
+                for r in sf_cxp:
+                    diff = _date_diff(r.get("vencimiento_fecha", ""))
+                    if diff is not None and prev_days <= diff < max_days:
+                        bucket["outflows"] += _to_float(r.get("monto_usd"))
+                # Outflows from flujo_semanal (debt service cuotas)
+                for r in sf_flujo:
+                    diff = _date_diff(r.get("vencimiento", ""))
+                    if diff is not None and prev_days <= diff < max_days:
+                        bucket["outflows"] += _to_float(r.get("cuota"))
+            else:
+                for f in forecasts:
+                    week = f.get("semana_inicio", "")
+                    if not week:
+                        continue
+                    try:
+                        diff = (datetime.fromisoformat(week).date() - today).days
+                    except (ValueError, TypeError):
+                        continue
+                    if prev_days <= diff < max_days:
+                        bucket["inflows"] += _to_float(f.get("ingresos"))
+                        bucket["outflows"] += _to_float(f.get("egresos"))
 
-            for p in payments:
-                # Use batch fecha_pago or created_at as proxy
-                fecha = p.get("created_at", "")
-                if not fecha:
-                    continue
-                try:
-                    diff = (datetime.fromisoformat(fecha.replace("Z", "+00:00")).date() - today).days
-                except (ValueError, TypeError):
-                    continue
-                if prev_days <= diff < max_days:
-                    bucket["outflows"] += _to_float(p.get("monto"))
+                for p in payments:
+                    fecha = p.get("created_at", "")
+                    if not fecha:
+                        continue
+                    try:
+                        diff = (datetime.fromisoformat(fecha.replace("Z", "+00:00")).date() - today).days
+                    except (ValueError, TypeError):
+                        continue
+                    if prev_days <= diff < max_days:
+                        bucket["outflows"] += _to_float(p.get("monto"))
 
             bucket["gap"] = bucket["inflows"] - bucket["outflows"]
             buckets.append(bucket)
@@ -304,34 +461,100 @@ async def cxp_dashboard(request: Request) -> JSONResponse:
         filters: dict = {}
         if empresa:
             filters["empresa"] = empresa
-
         instructions = await _supabase.select(
-            "tms.payment_instructions",
-            filters=filters,
-            order="created_at.desc",
-            limit=2000,
+            "tms.payment_instructions", filters=filters, order="created_at.desc", limit=2000,
         )
 
         # Get payment batches
         batches = await _supabase.select(
             "tms.payment_batches",
             filters={"deleted_at": "is.null"} if not empresa else {"deleted_at": "is.null", "empresa": empresa},
-            order="fecha_pago.desc",
-            limit=100,
+            order="fecha_pago.desc", limit=100,
         )
 
         today = datetime.now(timezone.utc).date()
 
-        # KPIs
-        total_pendiente = 0
-        total_pagado = 0
-        total_items = len(instructions)
-        by_priority: dict[str, float] = {}
-        by_estado: dict[str, int] = {}
-        by_metodo: dict[str, float] = {}
-        by_proveedor: dict[str, float] = {}
+        # ── Fallback to silver_finance.cxp_items when TMS tables are empty ──
+        if not instructions:
+            cxp_params: dict[str, str] = {"order": "vencimiento_fecha.desc", "limit": "2000"}
+            if empresa:
+                cxp_params["empresa"] = f"eq.{empresa}"
+            sf_cxp = await _sf_query("cxp_items", cxp_params)
 
-        aging_buckets = {"corriente": 0, "1-30": 0, "31-60": 0, "61-90": 0, "91+": 0}
+            total_pendiente = 0.0
+            total_pagado = 0.0
+            total_items = len(sf_cxp)
+            by_priority: dict[str, float] = {}
+            by_estado: dict[str, int] = {}
+            by_metodo: dict[str, float] = {}
+            by_proveedor: dict[str, float] = {}
+            aging_buckets = {"corriente": 0.0, "1-30": 0.0, "31-60": 0.0, "61-90": 0.0, "91+": 0.0}
+            aging_counts = {"corriente": 0, "1-30": 0, "31-60": 0, "61-90": 0, "91+": 0}
+
+            for item in sf_cxp:
+                monto = _to_float(item.get("monto_usd"))
+                prio = item.get("prioridad", "Sin prioridad") or "Sin prioridad"
+                clasif = item.get("clasificacion", "Otro") or "Otro"
+                prov = item.get("proveedor", "Desconocido") or "Desconocido"
+
+                total_pendiente += monto
+                by_priority[prio] = by_priority.get(prio, 0) + monto
+                by_estado["pendiente"] = by_estado.get("pendiente", 0) + 1
+                by_metodo[clasif] = by_metodo.get(clasif, 0) + monto
+                by_proveedor[prov] = by_proveedor.get(prov, 0) + monto
+
+                # Aging from vencimiento_fecha
+                fecha = item.get("vencimiento_fecha", "")
+                if fecha:
+                    try:
+                        dt = datetime.fromisoformat(fecha.replace("Z", "+00:00")) if "T" in fecha else datetime.strptime(fecha[:10], "%Y-%m-%d")
+                        venc_date = dt.date() if hasattr(dt, 'date') else dt
+                        days = (today - venc_date).days
+                        if days <= 0:
+                            aging_buckets["corriente"] += monto; aging_counts["corriente"] += 1
+                        elif days <= 30:
+                            aging_buckets["1-30"] += monto; aging_counts["1-30"] += 1
+                        elif days <= 60:
+                            aging_buckets["31-60"] += monto; aging_counts["31-60"] += 1
+                        elif days <= 90:
+                            aging_buckets["61-90"] += monto; aging_counts["61-90"] += 1
+                        else:
+                            aging_buckets["91+"] += monto; aging_counts["91+"] += 1
+                    except (ValueError, TypeError, AttributeError):
+                        pass
+
+            top_proveedores = sorted(
+                [{"nombre": k, "monto": v} for k, v in by_proveedor.items()],
+                key=lambda x: x["monto"], reverse=True,
+            )[:10]
+
+            return JSONResponse({
+                "kpis": {
+                    "total_pendiente": total_pendiente,
+                    "total_pagado": total_pagado,
+                    "total_items": total_items,
+                    "pending_batch_count": len(batches),
+                    "pending_batch_amount": 0,
+                    "approved_batch_count": 0,
+                },
+                "aging": [{"bucket": k, "monto": v, "count": aging_counts[k]} for k, v in aging_buckets.items()],
+                "by_priority": [{"priority": k, "monto": v} for k, v in sorted(by_priority.items())],
+                "by_estado": [{"estado": k, "count": v} for k, v in by_estado.items()],
+                "by_metodo": [{"metodo": k, "monto": v} for k, v in by_metodo.items()],
+                "top_proveedores": top_proveedores,
+                "pending_batches": [],
+            })
+
+        # ── Original TMS-based flow ──
+        total_pendiente = 0.0
+        total_pagado = 0.0
+        total_items = len(instructions)
+        by_priority = {}
+        by_estado = {}
+        by_metodo = {}
+        by_proveedor = {}
+
+        aging_buckets = {"corriente": 0.0, "1-30": 0.0, "31-60": 0.0, "61-90": 0.0, "91+": 0.0}
         aging_counts = {"corriente": 0, "1-30": 0, "31-60": 0, "61-90": 0, "91+": 0}
 
         for instr in instructions:
@@ -344,7 +567,6 @@ async def cxp_dashboard(request: Request) -> JSONResponse:
             by_estado[estado] = by_estado.get(estado, 0) + 1
             by_priority[prio] = by_priority.get(prio, 0) + monto
             by_metodo[metodo] = by_metodo.get(metodo, 0) + monto
-
             if len(by_proveedor) < 15 or prov in by_proveedor:
                 by_proveedor[prov] = by_proveedor.get(prov, 0) + monto
 
@@ -353,35 +575,27 @@ async def cxp_dashboard(request: Request) -> JSONResponse:
             else:
                 total_pendiente += monto
 
-            # Aging from created_at
             created = instr.get("created_at", "")
             if created:
                 try:
                     created_date = datetime.fromisoformat(created.replace("Z", "+00:00")).date()
                     days = (today - created_date).days
                     if days <= 0:
-                        aging_buckets["corriente"] += monto
-                        aging_counts["corriente"] += 1
+                        aging_buckets["corriente"] += monto; aging_counts["corriente"] += 1
                     elif days <= 30:
-                        aging_buckets["1-30"] += monto
-                        aging_counts["1-30"] += 1
+                        aging_buckets["1-30"] += monto; aging_counts["1-30"] += 1
                     elif days <= 60:
-                        aging_buckets["31-60"] += monto
-                        aging_counts["31-60"] += 1
+                        aging_buckets["31-60"] += monto; aging_counts["31-60"] += 1
                     elif days <= 90:
-                        aging_buckets["61-90"] += monto
-                        aging_counts["61-90"] += 1
+                        aging_buckets["61-90"] += monto; aging_counts["61-90"] += 1
                     else:
-                        aging_buckets["91+"] += monto
-                        aging_counts["91+"] += 1
+                        aging_buckets["91+"] += monto; aging_counts["91+"] += 1
                 except (ValueError, TypeError):
                     pass
 
-        # Batch summary
         pending_batches = [b for b in batches if b.get("estado") in ("borrador", "pendiente_aprobacion")]
         approved_batches = [b for b in batches if b.get("estado") == "aprobado"]
 
-        # Top proveedores sorted by amount
         top_proveedores = sorted(
             [{"nombre": k, "monto": v} for k, v in by_proveedor.items()],
             key=lambda x: x["monto"], reverse=True,
@@ -396,10 +610,7 @@ async def cxp_dashboard(request: Request) -> JSONResponse:
                 "pending_batch_amount": sum(_to_float(b.get("total_monto")) for b in pending_batches),
                 "approved_batch_count": len(approved_batches),
             },
-            "aging": [
-                {"bucket": k, "monto": v, "count": aging_counts[k]}
-                for k, v in aging_buckets.items()
-            ],
+            "aging": [{"bucket": k, "monto": v, "count": aging_counts[k]} for k, v in aging_buckets.items()],
             "by_priority": [{"priority": k, "monto": v} for k, v in sorted(by_priority.items())],
             "by_estado": [{"estado": k, "count": v} for k, v in by_estado.items()],
             "by_metodo": [{"metodo": k, "monto": v} for k, v in by_metodo.items()],
@@ -424,13 +635,40 @@ async def cxp_payment_schedule(request: Request) -> JSONResponse:
         today = datetime.now(timezone.utc).date()
 
         batches = await _supabase.select(
-            "tms.payment_batches",
-            filters={"deleted_at": "is.null"},
-            order="fecha_pago.asc",
-            limit=100,
+            "tms.payment_batches", filters={"deleted_at": "is.null"}, order="fecha_pago.asc", limit=100,
         )
 
-        schedule: list[dict] = []
+        # ── Fallback to silver_finance.cxp_items when TMS batches are empty ──
+        if not batches:
+            cxp = await _sf_query("cxp_items", {"order": "vencimiento_fecha.asc", "limit": "2000"})
+            schedule: list[dict] = []
+            for w in range(weeks):
+                week_start = today + timedelta(days=w * 7)
+                week_end = week_start + timedelta(days=6)
+                week_items = []
+                for item in cxp:
+                    fecha = item.get("vencimiento_fecha", "")
+                    if not fecha:
+                        continue
+                    try:
+                        fd = fecha[:10]
+                        if week_start.isoformat() <= fd <= week_end.isoformat():
+                            week_items.append(item)
+                    except (ValueError, TypeError):
+                        pass
+                schedule.append({
+                    "week": w + 1,
+                    "start": week_start.isoformat(),
+                    "end": week_end.isoformat(),
+                    "batches": 0,
+                    "total_monto": sum(_to_float(i.get("monto_usd")) for i in week_items),
+                    "items": len(week_items),
+                    "approved": 0,
+                    "pending": len(week_items),
+                })
+            return JSONResponse({"schedule": schedule, "weeks": weeks})
+
+        schedule = []
         for w in range(weeks):
             week_start = today + timedelta(days=w * 7)
             week_end = week_start + timedelta(days=6)
@@ -663,18 +901,27 @@ async def invoicing_dashboard(request: Request) -> JSONResponse:
     try:
         # Get contratos for project-based invoicing summary
         contratos = await _supabase.select(
-            "tms.contratos",
-            filters={"deleted_at": "is.null"},
-            order="created_at.desc",
-            limit=500,
+            "tms.contratos", filters={"deleted_at": "is.null"}, order="created_at.desc", limit=500,
+        )
+        hitos = await _supabase.select(
+            "tms.hitos_contrato", filters={"deleted_at": "is.null"}, order="fecha_programada.asc", limit=2000,
         )
 
-        hitos = await _supabase.select(
-            "tms.hitos_contrato",
-            filters={"deleted_at": "is.null"},
-            order="fecha_programada.asc",
-            limit=2000,
-        )
+        # ── Fallback to Excel-based contracts from projects_api ──
+        if not contratos and _excel_contracts:
+            excel_data = _excel_contracts()
+            # Map Excel fields to TMS field names
+            contratos = [{
+                "monto_contrato": c.get("monto_contrato", 0),
+                "monto_facturado": c.get("monto_facturado", 0),
+                "monto_cobrado": c.get("monto_cancelado", 0),
+                "estado": "en_ejecucion" if c.get("pendiente_cobrar", 0) > 0 else "cerrado",
+                "empresa": c.get("empresa", "Sin empresa"),
+                "area_comercial": c.get("area", ""),
+                "nombre": c.get("nombre_proyecto", ""),
+                "nombre_cliente": c.get("nombre_cliente", ""),
+            } for c in excel_data]
+            hitos = []  # No hitos from Excel
 
         total_contratado = sum(_to_float(c.get("monto_contrato")) for c in contratos)
         total_facturado = sum(_to_float(c.get("monto_facturado")) for c in contratos)
@@ -720,7 +967,6 @@ async def invoicing_dashboard(request: Request) -> JSONResponse:
                     upcoming_hitos.append(h)
             except (ValueError, TypeError):
                 pass
-
         upcoming_hitos.sort(key=lambda x: x.get("days_until", 999))
 
         facturacion_ratio = round(total_facturado / total_contratado * 100, 1) if total_contratado > 0 else 0
@@ -802,6 +1048,27 @@ async def project_finance_dashboard(request: Request) -> JSONResponse:
             "tms.hitos_contrato", filters={"deleted_at": "is.null"}, order="fecha_programada.asc", limit=5000,
         )
 
+        # ── Fallback to Excel-based contracts from projects_api ──
+        if not contratos and _excel_contracts:
+            excel_data = _excel_contracts()
+            contratos = [{
+                "monto_contrato": c.get("monto_contrato", 0),
+                "monto_facturado": c.get("monto_facturado", 0),
+                "monto_cobrado": c.get("monto_cancelado", 0),
+                "estado": "en_ejecucion" if c.get("pendiente_cobrar", 0) > 0 else "cerrado",
+                "empresa": c.get("empresa", "Sin empresa"),
+                "area_comercial": c.get("area", ""),
+                "tipo_proyecto": c.get("area", ""),
+                "nombre": c.get("nombre_proyecto", ""),
+                "nombre_cliente": c.get("nombre_cliente", ""),
+            } for c in excel_data]
+            if empresa:
+                contratos = [c for c in contratos if c.get("empresa", "").lower() == empresa.lower()]
+            hitos = []  # No hitos from Excel — we'll use fallback below
+
+        # Flag: did we fall back to Excel?
+        _used_excel_fallback = (len(hitos) == 0 and _excel_alerts is not None)
+
         today = datetime.now(timezone.utc).date()
 
         # KPIs
@@ -856,53 +1123,88 @@ async def project_finance_dashboard(request: Request) -> JSONResponse:
 
         # Milestone alerts (7d / 14d / 30d)
         milestone_alerts = []
-        for h in hitos:
-            fecha = h.get("fecha_programada")
-            if not fecha or h.get("estado") in ("facturado", "cobrado", "cerrado"):
-                continue
+        if hitos:
+            for h in hitos:
+                fecha = h.get("fecha_programada")
+                if not fecha or h.get("estado") in ("facturado", "cobrado", "cerrado"):
+                    continue
+                try:
+                    diff = (datetime.fromisoformat(fecha).date() - today).days
+                    if 0 <= diff <= 30:
+                        severity = "critical" if diff <= 7 else "warning" if diff <= 14 else "info"
+                        milestone_alerts.append({
+                            "hito_id": h.get("id"),
+                            "contrato_id": h.get("contrato_id"),
+                            "nombre": h.get("nombre", ""),
+                            "monto": _to_float(h.get("monto")),
+                            "fecha_programada": fecha,
+                            "days_until": diff,
+                            "severity": severity,
+                            "estado": h.get("estado", "pendiente"),
+                        })
+                except (ValueError, TypeError):
+                    pass
+            milestone_alerts.sort(key=lambda x: x["days_until"])
+        elif _used_excel_fallback:
+            # Fallback: use Excel-based milestone alerts from projects_api
             try:
-                diff = (datetime.fromisoformat(fecha).date() - today).days
-                if 0 <= diff <= 30:
-                    severity = "critical" if diff <= 7 else "warning" if diff <= 14 else "info"
+                raw_alerts = _excel_alerts()
+                for a in raw_alerts:
+                    severity = "critical" if a.get("urgency") in ("critical", "overdue") else \
+                               "warning" if a.get("urgency") == "warning" else "info"
                     milestone_alerts.append({
-                        "hito_id": h.get("id"),
-                        "contrato_id": h.get("contrato_id"),
-                        "nombre": h.get("nombre", ""),
-                        "monto": _to_float(h.get("monto")),
-                        "fecha_programada": fecha,
-                        "days_until": diff,
+                        "hito_id": a.get("contract_id"),
+                        "contrato_id": a.get("contract_id"),
+                        "nombre": a.get("nombre_proyecto", ""),
+                        "monto": _to_float(a.get("pendiente_cobrar") or a.get("monto_contrato")),
+                        "fecha_programada": a.get("fecha_cierre", ""),
+                        "days_until": a.get("days_until", 0),
                         "severity": severity,
-                        "estado": h.get("estado", "pendiente"),
+                        "estado": a.get("urgency", "pendiente"),
                     })
-            except (ValueError, TypeError):
-                pass
-        milestone_alerts.sort(key=lambda x: x["days_until"])
+            except Exception as e:
+                logger.warning(f"Excel alerts fallback failed: {e}")
 
         # Collection forecast — next 12 weeks from pending hitos
         collection_forecast: list[dict] = []
-        for w in range(12):
-            week_start = today + timedelta(days=w * 7)
-            week_end = week_start + timedelta(days=6)
-            week_monto = 0
-            week_count = 0
-            for h in hitos:
-                fecha = h.get("fecha_programada")
-                if not fecha or h.get("estado") not in ("pendiente",):
-                    continue
-                try:
-                    fd = datetime.fromisoformat(fecha).date()
-                    if week_start <= fd <= week_end:
-                        week_monto += _to_float(h.get("monto"))
-                        week_count += 1
-                except (ValueError, TypeError):
-                    pass
-            collection_forecast.append({
-                "week": w + 1,
-                "start": week_start.isoformat(),
-                "end": week_end.isoformat(),
-                "monto": week_monto,
-                "hitos": week_count,
-            })
+        if hitos:
+            for w in range(12):
+                week_start = today + timedelta(days=w * 7)
+                week_end = week_start + timedelta(days=6)
+                week_monto = 0
+                week_count = 0
+                for h in hitos:
+                    fecha = h.get("fecha_programada")
+                    if not fecha or h.get("estado") not in ("pendiente",):
+                        continue
+                    try:
+                        fd = datetime.fromisoformat(fecha).date()
+                        if week_start <= fd <= week_end:
+                            week_monto += _to_float(h.get("monto"))
+                            week_count += 1
+                    except (ValueError, TypeError):
+                        pass
+                collection_forecast.append({
+                    "week": w + 1,
+                    "start": week_start.isoformat(),
+                    "end": week_end.isoformat(),
+                    "monto": week_monto,
+                    "hitos": week_count,
+                })
+        elif _used_excel_fallback and _excel_forecast:
+            # Fallback: use Excel-based weekly forecast from projects_api
+            try:
+                raw_fc = _excel_forecast()
+                for i, f in enumerate(raw_fc[:12]):
+                    collection_forecast.append({
+                        "week": i + 1,
+                        "start": f.get("mes", ""),
+                        "end": f.get("semana", ""),
+                        "monto": _to_float(f.get("total", 0)),
+                        "hitos": f.get("count", 0),
+                    })
+            except Exception as e:
+                logger.warning(f"Excel forecast fallback failed: {e}")
 
         return JSONResponse({
             "kpis": {
@@ -946,6 +1248,20 @@ async def project_budget_vs_actual(request: Request) -> JSONResponse:
             order="monto_contrato.desc",
             limit=200,
         )
+
+        # ── Fallback to Excel-based contracts ──
+        if not contratos and _excel_contracts:
+            excel_data = _excel_contracts()
+            contratos = [{
+                "id": c.get("id"),
+                "numero_contrato": c.get("id", ""),
+                "nombre": c.get("nombre_proyecto", ""),
+                "empresa": c.get("empresa", ""),
+                "area_comercial": c.get("area", ""),
+                "monto_contrato": c.get("monto_contrato", 0),
+                "monto_facturado": c.get("monto_facturado", 0),
+                "monto_cobrado": c.get("monto_cancelado", 0),
+            } for c in excel_data if c.get("pendiente_cobrar", 0) > 0 or c.get("pendiente_facturar", 0) > 0]
 
         result = []
         for c in contratos:
@@ -1007,46 +1323,96 @@ async def fx_dashboard(request: Request) -> JSONResponse:
 
         today = datetime.now(timezone.utc).date()
 
-        # Net exposure from positions
-        net_usd_receivables = 0
-        net_usd_payables = 0
-        net_usd_debt = 0
-        by_bu: dict[str, dict] = {}
+        # ── Fallback: derive FX exposure from silver_finance when TMS tables are empty ──
+        if not positions:
+            flujo = await _sf_query("flujo_semanal", {"limit": "2000"})
+            cxp = await _sf_query("cxp_items", {"limit": "2000"})
 
-        for p in positions:
-            moneda = (p.get("moneda") or "USD").upper()
-            if moneda != "USD":
-                continue
-            tipo = p.get("tipo", "otro")
-            monto = _to_float(p.get("monto"))
-            empresa = p.get("empresa", "Sin empresa")
+            # Estimate CRC/USD rate from flujo data (look for CRC items with saldo_original)
+            default_rate = 505.0  # Approximate BCCR rate
+            net_usd_receivables = 0.0
+            net_usd_payables = 0.0
+            net_usd_debt = 0.0
+            by_bu: dict[str, dict] = {}
 
-            if tipo in ("receivable", "cxc"):
-                net_usd_receivables += monto
-            elif tipo in ("payable", "cxp"):
+            for r in flujo:
+                emp = r.get("compania", "Sin empresa")
+                moneda = (r.get("moneda") or "CRC").upper()
+                cuota = _to_float(r.get("cuota"))
+                saldo = _to_float(r.get("saldo_original"))
+                tipo = (r.get("tipo") or "").lower()
+
+                # Convert CRC to USD for exposure
+                cuota_usd = cuota / default_rate if moneda == "CRC" else cuota
+                saldo_usd = saldo / default_rate if moneda == "CRC" else saldo
+
+                if emp not in by_bu:
+                    by_bu[emp] = {"empresa": emp, "receivables": 0, "payables": 0, "debt": 0, "net": 0}
+
+                if "largo" in tipo:
+                    net_usd_debt += saldo_usd
+                    by_bu[emp]["debt"] += saldo_usd
+                else:
+                    net_usd_receivables += cuota_usd
+                    by_bu[emp]["receivables"] += cuota_usd
+
+            for r in cxp:
+                emp = r.get("empresa", "Sin empresa")
+                monto = _to_float(r.get("monto_usd"))
                 net_usd_payables += monto
-            elif tipo in ("debt", "deuda"):
-                net_usd_debt += monto
+                if emp not in by_bu:
+                    by_bu[emp] = {"empresa": emp, "receivables": 0, "payables": 0, "debt": 0, "net": 0}
+                by_bu[emp]["payables"] += monto
 
-            if empresa not in by_bu:
-                by_bu[empresa] = {"empresa": empresa, "receivables": 0, "payables": 0, "debt": 0, "net": 0}
-            if tipo in ("receivable", "cxc"):
-                by_bu[empresa]["receivables"] += monto
-            elif tipo in ("payable", "cxp"):
-                by_bu[empresa]["payables"] += monto
-            elif tipo in ("debt", "deuda"):
-                by_bu[empresa]["debt"] += monto
+            for b in by_bu.values():
+                b["net"] = b["receivables"] - b["payables"] - b["debt"]
 
-        for b in by_bu.values():
-            b["net"] = b["receivables"] - b["payables"] - b["debt"]
+            net_exposure = net_usd_receivables - net_usd_payables - net_usd_debt
+            # Use default rate when tms.tipos_cambio is empty
+            rate_compra = default_rate
+            rate_venta = default_rate + 2
+            rate_fecha = today.isoformat()
+        else:
+            # Original TMS-based aggregation
+            net_usd_receivables = 0
+            net_usd_payables = 0
+            net_usd_debt = 0
+            by_bu = {}
 
-        net_exposure = net_usd_receivables - net_usd_payables - net_usd_debt
+            for p in positions:
+                moneda = (p.get("moneda") or "USD").upper()
+                if moneda != "USD":
+                    continue
+                tipo = p.get("tipo", "otro")
+                monto = _to_float(p.get("monto"))
+                empresa = p.get("empresa", "Sin empresa")
 
-        # Latest rate
-        latest_rate = rates[0] if rates else {}
-        rate_compra = _to_float(latest_rate.get("compra"))
-        rate_venta = _to_float(latest_rate.get("venta"))
-        rate_fecha = latest_rate.get("fecha", "")
+                if tipo in ("receivable", "cxc"):
+                    net_usd_receivables += monto
+                elif tipo in ("payable", "cxp"):
+                    net_usd_payables += monto
+                elif tipo in ("debt", "deuda"):
+                    net_usd_debt += monto
+
+                if empresa not in by_bu:
+                    by_bu[empresa] = {"empresa": empresa, "receivables": 0, "payables": 0, "debt": 0, "net": 0}
+                if tipo in ("receivable", "cxc"):
+                    by_bu[empresa]["receivables"] += monto
+                elif tipo in ("payable", "cxp"):
+                    by_bu[empresa]["payables"] += monto
+                elif tipo in ("debt", "deuda"):
+                    by_bu[empresa]["debt"] += monto
+
+            for b in by_bu.values():
+                b["net"] = b["receivables"] - b["payables"] - b["debt"]
+
+            net_exposure = net_usd_receivables - net_usd_payables - net_usd_debt
+
+            # Latest rate
+            latest_rate = rates[0] if rates else {}
+            rate_compra = _to_float(latest_rate.get("compra")) or 505.0
+            rate_venta = _to_float(latest_rate.get("venta")) or 507.0
+            rate_fecha = latest_rate.get("fecha", today.isoformat())
 
         # Rate trend (last 30 entries)
         rate_trend = []
@@ -1133,18 +1499,31 @@ async def fx_scenario_sim(request: Request) -> JSONResponse:
         positions = await _supabase.select("tms.fx_positions", limit=500)
         rates = await _supabase.select("tms.tipos_cambio", order="fecha.desc", limit=1)
 
-        net_exposure = 0
-        for p in positions:
-            if (p.get("moneda") or "").upper() != "USD":
-                continue
-            monto = _to_float(p.get("monto"))
-            tipo = p.get("tipo", "")
-            if tipo in ("receivable", "cxc"):
-                net_exposure += monto
-            elif tipo in ("payable", "cxp", "debt", "deuda"):
-                net_exposure -= monto
+        net_exposure = 0.0
+        if not positions:
+            # Fallback: derive from silver_finance
+            flujo = await _sf_query("flujo_semanal", {"limit": "2000"})
+            cxp = await _sf_query("cxp_items", {"limit": "2000"})
+            default_rate = 505.0
+            for r in flujo:
+                moneda = (r.get("moneda") or "CRC").upper()
+                cuota = _to_float(r.get("cuota"))
+                cuota_usd = cuota / default_rate if moneda == "CRC" else cuota
+                net_exposure += cuota_usd
+            for r in cxp:
+                net_exposure -= _to_float(r.get("monto_usd"))
+        else:
+            for p in positions:
+                if (p.get("moneda") or "").upper() != "USD":
+                    continue
+                monto = _to_float(p.get("monto"))
+                tipo = p.get("tipo", "")
+                if tipo in ("receivable", "cxc"):
+                    net_exposure += monto
+                elif tipo in ("payable", "cxp", "debt", "deuda"):
+                    net_exposure -= monto
 
-        base_rate = _to_float(rates[0].get("venta")) if rates else 530.0
+        base_rate = _to_float(rates[0].get("venta")) if rates else 505.0
 
         # Generate scenarios
         shocks = [-10, -5, -2, -1, 0, 1, 2, 5, 10, 15, 20]
@@ -1192,13 +1571,142 @@ async def debt_dashboard(request: Request) -> JSONResponse:
 
         today = datetime.now(timezone.utc).date()
 
-        # KPIs
+        # ── Fallback: derive debt from silver_finance.flujo_semanal (credit operations) ──
+        if not instruments:
+            flujo = await _sf_query("flujo_semanal", {"order": "vencimiento.asc", "limit": "2000"})
+
+            # Group by operacion to build synthetic instruments
+            ops: dict[str, dict] = {}
+            for r in flujo:
+                op = r.get("operacion", "Sin operación") or "Sin operación"
+                if op not in ops:
+                    ops[op] = {
+                        "id": op, "nombre": op,
+                        "tipo": r.get("tipo", "Corto Plazo"),
+                        "banco": r.get("banco", "Sin banco"),
+                        "moneda": r.get("moneda", "CRC"),
+                        "saldo_original": _to_float(r.get("saldo_original")),
+                        "capital_vigente": _to_float(r.get("capital_actualizado") or r.get("capital") or r.get("saldo_original")),
+                        "empresa": r.get("compania", "Sin empresa"),
+                        "estado": "vigente",
+                        "tasa_interes": 0,
+                        "fecha_vencimiento": r.get("vencimiento"),
+                        "total_principal": 0, "total_intereses": 0, "cuotas": [],
+                    }
+                entry = ops[op]
+                entry["total_principal"] += _to_float(r.get("principal"))
+                entry["total_intereses"] += _to_float(r.get("intereses"))
+                if _to_float(r.get("saldo_original")) > entry["saldo_original"]:
+                    entry["saldo_original"] = _to_float(r.get("saldo_original"))
+                cap_upd = _to_float(r.get("capital_actualizado") or r.get("capital"))
+                if cap_upd > 0:
+                    entry["capital_vigente"] = cap_upd
+                entry["cuotas"].append({
+                    "fecha_pago": r.get("vencimiento"),
+                    "principal": _to_float(r.get("principal")),
+                    "intereses": _to_float(r.get("intereses")),
+                    "cuota": _to_float(r.get("cuota")),
+                })
+
+            synth_instruments = list(ops.values())
+
+            # KPIs
+            total_saldo_original = sum(_to_float(i.get("saldo_original")) for i in synth_instruments)
+            total_capital_vigente = sum(_to_float(i.get("capital_vigente")) for i in synth_instruments)
+            total_intereses_acumulados = sum(i["total_intereses"] for i in synth_instruments)
+            active_count = len(synth_instruments)
+
+            by_tipo: dict[str, dict] = {}
+            by_banco: dict[str, dict] = {}
+            by_moneda: dict[str, float] = {}
+
+            for inst in synth_instruments:
+                cap = _to_float(inst.get("capital_vigente"))
+                tipo = inst.get("tipo", "otro")
+                if tipo not in by_tipo:
+                    by_tipo[tipo] = {"tipo": tipo, "capital": 0, "count": 0}
+                by_tipo[tipo]["capital"] += cap
+                by_tipo[tipo]["count"] += 1
+
+                banco = inst.get("banco", "Sin banco")
+                if banco not in by_banco:
+                    by_banco[banco] = {"banco": banco, "capital": 0, "count": 0}
+                by_banco[banco]["capital"] += cap
+                by_banco[banco]["count"] += 1
+
+                moneda = inst.get("moneda", "CRC")
+                by_moneda[moneda] = by_moneda.get(moneda, 0) + cap
+
+            # Maturity profile from vencimiento dates
+            maturity_buckets = {"0-3m": 0.0, "3-6m": 0.0, "6-12m": 0.0, "1-3y": 0.0, "3-5y": 0.0, "5y+": 0.0}
+            for inst in synth_instruments:
+                venc = inst.get("fecha_vencimiento")
+                capital = _to_float(inst.get("capital_vigente"))
+                if not venc:
+                    continue
+                try:
+                    diff = (datetime.fromisoformat(venc).date() - today).days
+                    if diff <= 90: maturity_buckets["0-3m"] += capital
+                    elif diff <= 180: maturity_buckets["3-6m"] += capital
+                    elif diff <= 365: maturity_buckets["6-12m"] += capital
+                    elif diff <= 1095: maturity_buckets["1-3y"] += capital
+                    elif diff <= 1825: maturity_buckets["3-5y"] += capital
+                    else: maturity_buckets["5y+"] += capital
+                except (ValueError, TypeError):
+                    pass
+
+            # Payment schedule from cuotas
+            payment_schedule: list[dict] = []
+            all_cuotas = []
+            for inst in synth_instruments:
+                all_cuotas.extend(inst.get("cuotas", []))
+            for w in range(12):
+                week_start = today + timedelta(days=w * 7)
+                week_end = week_start + timedelta(days=6)
+                wp = 0.0; wi = 0.0; wc = 0
+                for c in all_cuotas:
+                    fecha = c.get("fecha_pago")
+                    if not fecha: continue
+                    try:
+                        fd = datetime.fromisoformat(fecha).date()
+                        if week_start <= fd <= week_end:
+                            wp += _to_float(c.get("principal")); wi += _to_float(c.get("intereses")); wc += 1
+                    except (ValueError, TypeError): pass
+                payment_schedule.append({"week": w+1, "start": week_start.isoformat(), "end": week_end.isoformat(),
+                                          "principal": wp, "intereses": wi, "cuota": wp+wi, "pagos": wc})
+
+            return JSONResponse({
+                "kpis": {
+                    "total_saldo_original": total_saldo_original,
+                    "total_capital_vigente": total_capital_vigente,
+                    "total_intereses_acumulados": total_intereses_acumulados,
+                    "active_instruments": active_count,
+                    "total_instruments": len(synth_instruments),
+                    "weighted_avg_rate": 0,
+                    "next_payment_amount": payment_schedule[0]["cuota"] if payment_schedule else 0,
+                },
+                "maturity_profile": [{"bucket": k, "capital": v} for k, v in maturity_buckets.items()],
+                "by_tipo": sorted(by_tipo.values(), key=lambda x: x["capital"], reverse=True),
+                "by_banco": sorted(by_banco.values(), key=lambda x: x["capital"], reverse=True),
+                "by_moneda": [{"moneda": k, "capital": v} for k, v in by_moneda.items()],
+                "payment_schedule": payment_schedule,
+                "instruments": [{
+                    "id": i.get("id"), "nombre": i.get("nombre"), "tipo": i.get("tipo"),
+                    "banco": i.get("banco"), "moneda": i.get("moneda"),
+                    "saldo_original": _to_float(i.get("saldo_original")),
+                    "capital_vigente": _to_float(i.get("capital_vigente")),
+                    "tasa_interes": 0, "fecha_vencimiento": i.get("fecha_vencimiento"),
+                    "estado": "vigente", "empresa": i.get("empresa"),
+                } for i in synth_instruments[:50]],
+            })
+
+        # ── Original TMS-based flow ──
         total_saldo_original = 0
         total_capital_vigente = 0
         total_intereses_acumulados = 0
-        by_tipo: dict[str, dict] = {}
-        by_banco: dict[str, dict] = {}
-        by_moneda: dict[str, float] = {}
+        by_tipo = {}
+        by_banco = {}
+        by_moneda = {}
         active_count = 0
 
         for inst in instruments:
@@ -1237,60 +1745,42 @@ async def debt_dashboard(request: Request) -> JSONResponse:
                 continue
             try:
                 diff = (datetime.fromisoformat(venc).date() - today).days
-                if diff <= 90:
-                    maturity_buckets["0-3m"] += capital
-                elif diff <= 180:
-                    maturity_buckets["3-6m"] += capital
-                elif diff <= 365:
-                    maturity_buckets["6-12m"] += capital
-                elif diff <= 1095:
-                    maturity_buckets["1-3y"] += capital
-                elif diff <= 1825:
-                    maturity_buckets["3-5y"] += capital
-                else:
-                    maturity_buckets["5y+"] += capital
+                if diff <= 90: maturity_buckets["0-3m"] += capital
+                elif diff <= 180: maturity_buckets["3-6m"] += capital
+                elif diff <= 365: maturity_buckets["6-12m"] += capital
+                elif diff <= 1095: maturity_buckets["1-3y"] += capital
+                elif diff <= 1825: maturity_buckets["3-5y"] += capital
+                else: maturity_buckets["5y+"] += capital
             except (ValueError, TypeError):
                 pass
 
         # Upcoming payments (next 12 weeks)
-        payment_schedule: list[dict] = []
+        payment_schedule = []
         for w in range(12):
             week_start = today + timedelta(days=w * 7)
             week_end = week_start + timedelta(days=6)
-            week_principal = 0
-            week_interes = 0
-            week_count = 0
+            week_principal = 0; week_interes = 0; week_count = 0
             for s in schedules:
                 fecha = s.get("fecha_pago")
-                if not fecha:
-                    continue
+                if not fecha: continue
                 try:
                     fd = datetime.fromisoformat(fecha).date()
                     if week_start <= fd <= week_end:
                         week_principal += _to_float(s.get("principal"))
                         week_interes += _to_float(s.get("intereses"))
                         week_count += 1
-                except (ValueError, TypeError):
-                    pass
-            payment_schedule.append({
-                "week": w + 1,
-                "start": week_start.isoformat(),
-                "end": week_end.isoformat(),
-                "principal": week_principal,
-                "intereses": week_interes,
-                "cuota": week_principal + week_interes,
-                "pagos": week_count,
-            })
+                except (ValueError, TypeError): pass
+            payment_schedule.append({"week": w+1, "start": week_start.isoformat(), "end": week_end.isoformat(),
+                                      "principal": week_principal, "intereses": week_interes,
+                                      "cuota": week_principal + week_interes, "pagos": week_count})
 
         # Weighted average rate
-        weighted_rate_num = 0
-        weighted_rate_den = 0
+        weighted_rate_num = 0; weighted_rate_den = 0
         for inst in instruments:
             cap = _to_float(inst.get("capital_vigente", inst.get("saldo_original")))
             rate = _to_float(inst.get("tasa_interes"))
             if cap > 0 and rate > 0:
-                weighted_rate_num += cap * rate
-                weighted_rate_den += cap
+                weighted_rate_num += cap * rate; weighted_rate_den += cap
         avg_rate = round(weighted_rate_num / weighted_rate_den, 4) if weighted_rate_den > 0 else 0
 
         return JSONResponse({
@@ -1309,17 +1799,13 @@ async def debt_dashboard(request: Request) -> JSONResponse:
             "by_moneda": [{"moneda": k, "capital": v} for k, v in by_moneda.items()],
             "payment_schedule": payment_schedule,
             "instruments": [{
-                "id": i.get("id"),
-                "nombre": i.get("nombre"),
-                "tipo": i.get("tipo"),
-                "banco": i.get("banco"),
-                "moneda": i.get("moneda"),
+                "id": i.get("id"), "nombre": i.get("nombre"), "tipo": i.get("tipo"),
+                "banco": i.get("banco"), "moneda": i.get("moneda"),
                 "saldo_original": _to_float(i.get("saldo_original")),
                 "capital_vigente": _to_float(i.get("capital_vigente", i.get("saldo_original"))),
                 "tasa_interes": _to_float(i.get("tasa_interes")),
                 "fecha_vencimiento": i.get("fecha_vencimiento"),
-                "estado": i.get("estado"),
-                "empresa": i.get("empresa"),
+                "estado": i.get("estado"), "empresa": i.get("empresa"),
             } for i in instruments[:50]],
         })
     except Exception as e:
